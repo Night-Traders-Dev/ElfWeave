@@ -267,15 +267,24 @@ def tool_llm_summarize(text: str, max_sentences: int = 5) -> str:
     return (content or "").strip()
 
 
+
+
 @register_tool("weather", "Get current weather and forecast for a location.")
 def tool_weather(location: str) -> str:
-    import subprocess
     out = subprocess.run(
-        ["python", "agent.py", location],
-        capture_output=True, text=True
+        [
+            "uv", "run",
+            "--with", "browser-use",
+            "--with", "ollama",
+            "python", "src/modules/weather.py",
+            f"weather in {location}",
+        ],
+        capture_output=True,
+        text=True,
     )
+    if out.returncode != 0 and not out.stdout.strip():
+        return f"[tool error] weather module failed: {out.stderr.strip()[:300]}"
     return out.stdout.strip()
-
 
 # ══════════════════════════════════════════════════════════════════════
 #  Data models
