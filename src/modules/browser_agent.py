@@ -29,8 +29,7 @@ from .browser_logic import execute_browser_task
 #  Config
 # ══════════════════════════════════════════════════════════════════════
 
-OLLAMA_URL      = "http://localhost:11434"
-DEFAULT_MODEL   = "qwen2.5:7b" # Suggested model for browser-use logic
+from src.common.config import OLLAMA_URL, DEFAULT_MODEL
 UI_REFRESH_HZ   = 10
 
 # ══════════════════════════════════════════════════════════════════════
@@ -55,8 +54,23 @@ async def run(query: str, model: str, harness: bool = False) -> int:
         # Ensure we have the model (and pull it if needed)
         _ = setup_ollama(OLLAMA_URL, [model])
         s_init.done("Ollama ready · model verified"); refresh()
+        
+        # ── Load Domain Knowledge ──
+        expert_manual = ""
+        try:
+            from src.modules.knowledge_logic import get_logic
+            logic = get_logic()
+            if logic.load():
+                results = logic.query("browser navigator protocol stealth extraction")
+                expert_manual = "\n".join(r.get("text", "") for r in results)
+        except Exception:
+            pass
+            
+        final_task = query
+        if expert_manual:
+            final_task = f"ADHERE TO THESE PROTOCOLS:\n{expert_manual}\n\nTASK:\n{query}"
 
-        result = await execute_browser_task(query, model, OLLAMA_URL, ui, refresh, harness=harness)
+        result = await execute_browser_task(final_task, model, OLLAMA_URL, ui, refresh, harness=harness)
         
         ui.running = False; refresh()
         

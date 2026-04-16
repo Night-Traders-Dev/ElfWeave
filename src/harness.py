@@ -64,14 +64,16 @@ from rich.text import Text
 from src.common.ui import UIState
 from src.common.ollama import setup_ollama, _stream_chat, _chat_json, _warmup
 from src.common.types import TokenUsage
+from src.common.config import OLLAMA_URL, PLANNER_MODEL, CHECKER_MODEL, REVIEW_MODEL
 
 # ══════════════════════════════════════════════════════════════════════
 #  Config
 # ══════════════════════════════════════════════════════════════════════
 
-OLLAMA_URL      = "http://localhost:11434"
-CHECKER_MODEL   = "llama3.2:3b"
-PLANNER_MODEL   = "qwen2.5:3b"
+# Moved to config.py
+# OLLAMA_URL      = "http://localhost:11434"
+# CHECKER_MODEL   = "llama3.2:3b"
+# PLANNER_MODEL   = "qwen2.5:3b"
 
 HISTORY_PATH    = Path.home() / ".harness_history.json"
 UI_REFRESH_HZ   = 10
@@ -117,16 +119,22 @@ PLANNER_SYSTEM = dedent("""\
 """)
 
 VALIDATOR_SYSTEM = dedent("""\
-    You are a quality-check agent. Given the original user query and the
-    aggregated output produced by a multi-tool pipeline, decide whether
-    the output satisfactorily answers the query.
+    You are a high-fidelity Quality Assurance agent.
+    Given the original user query and the aggregated output produced by a multi-tool pipeline, 
+    decide whether the output satisfactorily and accurately answers the query.
 
-    Respond with ONLY a JSON object — no markdown, no prose.
+    Evaluation Criteria:
+      1. Grounding: All numbers/facts must come from tool outputs.
+      2. Completeness: Did we answer every part of the user's multi-step request?
+      3. Protocol Check: If the output contains specialized data (e.g. weather), does it follow expert protocols?
+      4. Formatting: Is the output visually clean and descriptive?
+
+    Respond with ONLY a JSON object:
     {
       "aligned": bool,
-      "quality_score": 0.0,
-      "issues": ["issue1", ...],
-      "notes": "brief summary"
+      "quality_score": 0.0 (0.0 to 1.0),
+      "issues": ["missing X", "incorrect Y", ...],
+      "notes": "critical summary of quality"
     }
 """)
 
@@ -586,7 +594,7 @@ def validate_result(
         f"Pipeline output:\n{aggregate[:4_000]}"
     )
     result, _ = _chat_json(
-        client, CHECKER_MODEL, VALIDATOR_SYSTEM, user_msg, ui, refresh, "validate"
+        client, REVIEW_MODEL, VALIDATOR_SYSTEM, user_msg, ui, refresh, "validate"
     )
     return result
 
@@ -686,7 +694,7 @@ def print_result_card(
 
 def run(query: str, dry_run: bool = False) -> int:
     console = Console()
-    ui      = UIState(agent_name="agent-harness", model_info=f"{CHECKER_MODEL} · {PLANNER_MODEL}")
+    ui      = UIState(agent_name="agent-harness", model_info=f"{CHECKER_MODEL} · {PLANNER_MODEL} · {REVIEW_MODEL}")
 
     plan: list[PlanStep]       = []
     results: list[StepResult]  = []
@@ -706,10 +714,11 @@ def run(query: str, dry_run: bool = False) -> int:
         try:
             # ── 1. connect + warmup ───────────────────────────────────
             s_init = ui.add_step("connect + warmup").start(); refresh()
-            client = setup_ollama(OLLAMA_URL, [CHECKER_MODEL, PLANNER_MODEL])
-            with ThreadPoolExecutor(max_workers=2) as wp:
+            client = setup_ollama(OLLAMA_URL, [CHECKER_MODEL, PLANNER_MODEL, REVIEW_MODEL])
+            with ThreadPoolExecutor(max_workers=3) as wp:
                 wp.submit(_warmup, client, CHECKER_MODEL)
                 wp.submit(_warmup, client, PLANNER_MODEL)
+                wp.submit(_warmup, client, REVIEW_MODEL)
             s_init.done("Ollama ready · models warmed"); refresh()
 
             # ── 2. sanity check ───────────────────────────────────────

@@ -6,6 +6,7 @@ from typing import Any, Tuple, List, Dict, Callable, Optional
 
 from ollama import Client, ResponseError
 from .types import TokenUsage
+from .config import OLLAMA_URL, get_ollama_options
 
 def _wait_ollama(client: Client, timeout: int = 30) -> None:
     t0 = time.time()
@@ -33,7 +34,7 @@ def _warmup(client: Client, model: str) -> None:
     try:
         client.chat(model=model,
                     messages=[{"role": "user", "content": "hi"}],
-                    options={"num_predict": 1, "num_gpu": 99})
+                    options=get_ollama_options(ctx_override=1024)) # Light warmup
     except Exception:
         pass
 
@@ -91,8 +92,10 @@ def _stream_chat(
     parts: List[str] = []
     final_u = est
 
-    for chunk in client.chat(model=model, messages=messages, stream=True,
-                              options={"temperature": temperature, "num_gpu": 99}):
+    opts = get_ollama_options()
+    opts["temperature"] = temperature
+
+    for chunk in client.chat(model=model, messages=messages, stream=True, options=opts):
         piece = _msg_content(chunk)
         if piece:
             parts.append(piece)
@@ -127,7 +130,7 @@ def _chat_json(
             model=model,
             messages=[{"role": "system", "content": system},
                       {"role": "user",   "content": user}],
-            options={"temperature": 0.05, "num_gpu": 99},
+            options=get_ollama_options(),
         )
         u = _usage_from(resp)
         ui.set_usage(phase, u); refresh()

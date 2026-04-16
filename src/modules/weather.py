@@ -302,6 +302,7 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
     prev_snap:  Optional[MemorySnapshot]   = None
     answer      = ""
     vision_note = ""
+    expert_manual = ""
 
     if harness:
         def refresh() -> None: pass
@@ -315,9 +316,20 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
     try:
         s_init = ui.add_step("connect + warmup").start(); refresh()
         client = setup_ollama(OLLAMA_URL, [AGENT_MODEL, CHECKER_MODEL])
-        with ThreadPoolExecutor(max_workers=2) as warmpool:
-            warmpool.submit(_warmup, client, AGENT_MODEL)
-            warmpool.submit(_warmup, client, CHECKER_MODEL)
+        # Auto-warmup
+        _warmup(client, AGENT_MODEL)
+        _warmup(client, CHECKER_MODEL)
+        
+        # ── Load Domain Knowledge ──
+        try:
+            from src.modules.knowledge_logic import get_logic
+            logic = get_logic()
+            if logic.load():
+                results = logic.query("weather protocol visual assessment coordinates")
+                expert_manual = "\n".join(r.get("text", "") for r in results)
+        except Exception:
+            pass # Graceful fallback if knowledge logic or index missing
+            
         s_init.done("Ollama ready · models warmed"); refresh()
 
         loc_hint = extract_location(query) or query.strip().rstrip(" ?.")
@@ -367,7 +379,14 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
 
         s_ans = ui.add_step("generate answer").start(); refresh()
         ctx   = build_context(query, report, comp, vision_note)
-        answer, _ = _stream_chat(client, AGENT_MODEL, [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": f"Query: {query}\n\n{ctx}"}], ui, refresh, phase="answer")
+        sys_prompt = AGENT_SYSTEM
+        if expert_manual:
+            sys_prompt = f"EXPERT MANUAL:\n{expert_manual}\n\n{AGENT_SYSTEM}"
+
+        answer, _ = _stream_chat(client, AGENT_MODEL, 
+                                 [{"role": "system", "content": sys_prompt},
+                                  {"role": "user", "content": f"Query: {query}\n\n{ctx}"}],
+                                 ui, refresh, phase="answer")
         s_ans.done(answer[:60]); refresh()
 
         s_val = ui.add_step("validate result").start(); refresh()
