@@ -6,8 +6,16 @@ Modularized version using src.common and src.modules.weather_logic
 
 from __future__ import annotations
 
-import argparse
 import sys
+from pathlib import Path
+
+# Fix sys.path for robust modular imports when run as a script
+_root = str(Path(__file__).resolve().parent.parent.parent)
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+
+
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from textwrap import dedent
@@ -27,7 +35,7 @@ from src.common.ollama import setup_ollama, _stream_chat, _chat_json, _warmup
 from src.common.types import TokenUsage
 
 # Weather logic imports
-from .weather_logic import (
+from src.modules.weather_logic import (
     WeatherReport, WeatherComparison, MemorySnapshot,
     geocode, fetch_weather, load_memory, save_memory,
     find_prev_snapshot, compare, extract_location,
@@ -35,7 +43,7 @@ from .weather_logic import (
 )
 
 # Weather UI imports
-from .weather_ui import (
+from src.modules.weather_ui import (
     _cstyle, _uv_col, _bar, _moon_em, _day_label, _delta_text,
     _coord, _uv_label, _obs_to_local
 )

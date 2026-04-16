@@ -29,6 +29,15 @@ Usage
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Ensure the project root is in sys.path for robust absolute imports
+_root = str(Path(__file__).resolve().parent.parent)
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+
+
 import argparse
 import inspect
 import json
