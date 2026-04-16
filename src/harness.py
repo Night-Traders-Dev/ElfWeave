@@ -271,13 +271,15 @@ def tool_llm_summarize(text: str, max_sentences: int = 5) -> str:
 
 @register_tool("weather", "Get current weather and forecast for a location.")
 def tool_weather(location: str) -> str:
+    weather_path = Path(__file__).parent / "modules" / "weather.py"
     out = subprocess.run(
         [
             "uv", "run",
             "--with", "browser-use",
             "--with", "ollama",
-            "python", "src/modules/weather.py",
+            "python", str(weather_path),
             f"weather in {location}",
+            "--harness",
         ],
         capture_output=True,
         text=True,

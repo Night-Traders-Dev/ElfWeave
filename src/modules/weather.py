@@ -1288,6 +1288,7 @@ def print_weather_card(
     prev_snap: Optional[MemorySnapshot],
     answer: str,
     vision: str,
+    harness: bool = False,
 ) -> None:
 
     em, ccol = _cstyle(r.desc)
@@ -1305,7 +1306,7 @@ def print_weather_card(
     if r.obs_time:
         hdr.append(f"\n  Observed {_obs_to_local(r.obs_time, r.tz_name)}", "grey50")
     hdr.append("\n")
-    console.print(Panel(hdr, border_style="blue", box=box.DOUBLE_EDGE))
+    console.print(Panel(hdr, border_style="blue", box=box.SIMPLE if harness else box.DOUBLE_EDGE))
 
     # ── current conditions ────────────────────────────────────────────
     L = Table.grid(padding=(0, 2)); L.add_column(style="grey58", min_width=15); L.add_column(style="bold white")
@@ -1328,7 +1329,7 @@ def print_weather_card(
 
     console.print(Panel(Columns([L, R], equal=True, expand=True),
                         title="[bold]Current Conditions[/bold]",
-                        border_style=ccol, box=box.ROUNDED))
+                        border_style=ccol, box=box.SIMPLE if harness else box.ROUNDED))
 
     # ── today's hourly table ──────────────────────────────────────────
     if r.forecast and r.forecast[0].hourly:
@@ -1371,7 +1372,7 @@ def print_weather_card(
             )
 
         console.print(Panel(ht, title=f"[bold]Today's Hourly Forecast[/bold]",
-                            border_style="cyan", box=box.ROUNDED))
+                            border_style="cyan", box=box.SIMPLE if harness else box.ROUNDED))
 
     # ── prior-day delta ───────────────────────────────────────────────
     if comp.found and prev_snap:
@@ -1397,7 +1398,7 @@ def print_weather_card(
             dt.add_row(label, str(old), str(new), delta)
 
         console.print(Panel(dt, title=f"[bold]vs {comp.previous_date}[/bold]",
-                            border_style="magenta", box=box.ROUNDED))
+                            border_style="magenta", box=box.SIMPLE if harness else box.ROUNDED))
     elif not comp.found:
         console.print(Panel(
             Text("No prior snapshot — run again tomorrow to compare.", "grey50"),
@@ -1434,7 +1435,7 @@ def print_weather_card(
                 moon or "—",
             )
         console.print(Panel(ft, title="[bold]3-Day Forecast[/bold]",
-                            border_style="yellow3", box=box.ROUNDED))
+                            border_style="yellow3", box=box.SIMPLE if harness else box.ROUNDED))
 
     # ── vision note ───────────────────────────────────────────────────
     if vision:
@@ -1475,7 +1476,7 @@ def print_weather_card(
 #  Main pipeline
 # ══════════════════════════════════════════════════════════════════════
 
-def run(query: str, image_path: Optional[str]) -> int:
+def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> int:
     console = Console()
     ui      = UIState()
 
@@ -1486,172 +1487,180 @@ def run(query: str, image_path: Optional[str]) -> int:
     vision_note = ""
     valid       = True
 
-    with Live(ui.render(), refresh_per_second=UI_REFRESH_HZ,
-              console=console, screen=False) as live:
-
+    # In harness mode, we skip the Live TUI to avoid messy ANSI captures.
+    # We still use UIState to track steps, but we don't render them live.
+    if harness:
         def refresh() -> None:
-            live.update(ui.render())
+            pass
+        # Define a mock live object if needed, but we'll use a manual try/finally here.
+        live = None
+    else:
+        live = Live(ui.render(), refresh_per_second=UI_REFRESH_HZ,
+                    console=console, screen=False)
+        live.start()
+        def refresh() -> None:
+            if live:
+                live.update(ui.render())
 
-        try:
-            # ── 1. setup ──────────────────────────────────────────────
-            s_init = ui.add_step("connect + warmup").start(); refresh()
-            client = setup_ollama()
-            # Warm up both models concurrently (fire-and-forget HTTP pings)
-            with ThreadPoolExecutor(max_workers=2) as warmpool:
-                warmpool.submit(_warmup, client, AGENT_MODEL)
-                warmpool.submit(_warmup, client, CHECKER_MODEL)
-            s_init.done("Ollama ready · models warmed"); refresh()
+    try:
+        # ── 1. setup ──────────────────────────────────────────────
+        s_init = ui.add_step("connect + warmup").start(); refresh()
+        client = setup_ollama()
+        # Warm up both models concurrently (fire-and-forget HTTP pings)
+        with ThreadPoolExecutor(max_workers=2) as warmpool:
+            warmpool.submit(_warmup, client, AGENT_MODEL)
+            warmpool.submit(_warmup, client, CHECKER_MODEL)
+        s_init.done("Ollama ready · models warmed"); refresh()
 
-            # ── 2. extract a location hint before firing threads ──────
-            loc_hint = extract_location(query)
-            if not loc_hint:
-                loc_hint = query.strip().rstrip(" ?.")
+        # ── 2. extract a location hint before firing threads ──────
+        loc_hint = extract_location(query)
+        if not loc_hint:
+            loc_hint = query.strip().rstrip(" ?.")
 
-            # ── 3. parallel: classify (LLM) + geocode (HTTP) ──────────
-            s_cls  = ui.add_step("classify query").start(); refresh()
-            s_geo  = ui.add_step("geocode").start();        refresh()
+        # ── 3. parallel: classify (LLM) + geocode (HTTP) ──────────
+        s_cls  = ui.add_step("classify query").start(); refresh()
+        s_geo  = ui.add_step("geocode").start();        refresh()
 
-            with ThreadPoolExecutor(max_workers=2) as p:
-                f_cls  = p.submit(check_prompt, client, query, ui, lambda: None)
-                f_geo  = p.submit(geocode, loc_hint)
+        with ThreadPoolExecutor(max_workers=2) as p:
+            f_cls  = p.submit(check_prompt, client, query, ui, lambda: None)
+            f_geo  = p.submit(geocode, loc_hint)
 
-                # poll both, refreshing live UI while we wait
-                while not (f_cls.done() and f_geo.done()):
-                    refresh()
-                    time.sleep(0.08)
+            # poll both, refreshing live UI while we wait
+            while not (f_cls.done() and f_geo.done()):
+                refresh()
+                time.sleep(0.08)
 
-                pc_raw = f_cls.result()
-                coords = f_geo.result()
+            pc_raw = f_cls.result()
+            coords = f_geo.result()
 
-            is_weather = bool(pc_raw.get("is_weather_query", False))
-            location   = str(pc_raw.get("location", "")).strip() or loc_hint
-            confidence = float(pc_raw.get("confidence", 0.0))
-            reason     = str(pc_raw.get("reason", ""))
+        is_weather = bool(pc_raw.get("is_weather_query", False))
+        location   = str(pc_raw.get("location", "")).strip() or loc_hint
+        confidence = float(pc_raw.get("confidence", 0.0))
+        reason     = str(pc_raw.get("reason", ""))
 
-            s_cls.done(f"{'✓ weather' if is_weather else '✗ not weather'}  ({confidence:.0%})  {reason[:40]}")
-            cached = (location.lower().strip() in _geocache)
-            s_geo.done(
-                f"{coords[0]:.4f}°N, {coords[1]:.4f}°W" if coords else "geocode failed (using raw string)",
-                cached=cached,
-            )
-            refresh()
+        s_cls.done(f"{'✓ weather' if is_weather else '✗ not weather'}  ({confidence:.0%})  {reason[:40]}")
+        cached = (location.lower().strip() in _geocache)
+        s_geo.done(
+            f"{coords[0]:.4f}°N, {coords[1]:.4f}°W" if coords else "geocode failed (using raw string)",
+            cached=cached,
+        )
+        refresh()
 
-            if not is_weather:
-                ui.push_chunk("This doesn't appear to be a weather query.\n" + reason)
-                ui.running = False; refresh()
-                return 1
-
-            # ── 4. parallel: wttr.in fetch + memory load ──────────────
-            s_wx  = ui.add_step("fetch weather").start();  refresh()
-            s_mem = ui.add_step("load memory").start();    refresh()
-
-            with ThreadPoolExecutor(max_workers=2) as p2:
-                f_wx  = p2.submit(fetch_weather, location, coords)
-                f_mem = p2.submit(load_memory)
-
-                while not (f_wx.done() and f_mem.done()):
-                    refresh()
-                    time.sleep(0.08)
-
-                report    = f_wx.result()
-                snapshots = f_mem.result()
-
-            s_wx.done(f"{report.desc} · {report.temp_f}°F · hum {report.humidity}%")
-            prev_snap  = find_prev_snapshot(report, snapshots)
-            comp       = compare(prev_snap, report)
-            mem_detail = f"vs {comp.previous_date}" if comp.found else "no prior data"
-            s_mem.done(mem_detail); refresh()
-
-            # ── 5. optional vision ────────────────────────────────────
-            if image_path:
-                img = Path(image_path).expanduser()
-                if img.exists():
-                    s_vis = ui.add_step("vision analysis").start(); refresh()
-                    vision_note, _ = _stream_chat(
-                        client, AGENT_MODEL,
-                        [
-                            {"role": "system", "content": VISION_SYSTEM},
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"Analyse this image.\n"
-                                    f"Context: {compact_summary(report)}"
-                                ),
-                                "images": [str(img)],
-                            },
-                        ],
-                        ui, refresh, phase="vision", temperature=0.15,
-                    )
-                    s_vis.done(vision_note[:60]); refresh()
-                else:
-                    ui.add_step("vision analysis").skip(f"file not found: {image_path}")
-                    refresh()
-
-            # ── 6. generate answer ────────────────────────────────────
-            s_ans = ui.add_step("generate answer").start(); refresh()
-            ctx   = build_context(query, report, comp, vision_note)
-            answer, _ = _stream_chat(
-                client, AGENT_MODEL,
-                [
-                    {"role": "system", "content": AGENT_SYSTEM},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Using the data below, answer: {query}\n\n"
-                            f"Use the four-section format in your instructions.\n\n"
-                            f"{ctx}"
-                        ),
-                    },
-                ],
-                ui, refresh, phase="answer", temperature=0.25,
-            )
-            s_ans.done(answer[:60]); refresh()
-
-            # ── 7. validate ───────────────────────────────────────────
-            s_val = ui.add_step("validate result").start(); refresh()
-            res   = check_result(client, query, answer,
-                                 report.queried_location, report.location_label,
-                                 ui, refresh)
-            valid = bool(res.get("is_valid", True))
-            score = float(res.get("quality_score", 1.0))
-            notes = str(res.get("notes", ""))
-            issues = res.get("issues", [])
-            val_detail = f"valid={valid}  score={score:.0%}  {notes[:45]}"
-            if issues:
-                val_detail += "  issues: " + "; ".join(issues)[:30]
-            s_val.done(val_detail); refresh()
-
-            # ── 8. save memory ────────────────────────────────────────
-            s_save = ui.add_step("save memory").start(); refresh()
-            snapshots = upsert_snapshot(snapshots, snapshot_from_report(report))
-            save_memory(snapshots)
-            s_save.done(f"{MEMORY_PATH.name}"); refresh()
-
+        if not is_weather:
+            ui.push_chunk("This doesn't appear to be a weather query.\n" + reason)
             ui.running = False; refresh()
+            return 1
 
-        except KeyboardInterrupt:
-            ui.running = False
-            ui.add_step("interrupted").error("KeyboardInterrupt"); refresh()
-            return 130
-        except Exception as exc:
-            ui.running = False
-            ui.add_step("fatal error").error(str(exc)[:80]); refresh()
-            raise
+        # ── 4. parallel: wttr.in fetch + memory load ──────────────
+        s_wx  = ui.add_step("fetch weather").start();  refresh()
+        s_mem = ui.add_step("load memory").start();    refresh()
+
+        with ThreadPoolExecutor(max_workers=2) as p2:
+            f_wx  = p2.submit(fetch_weather, location, coords)
+            f_mem = p2.submit(load_memory)
+
+            while not (f_wx.done() and f_mem.done()):
+                refresh()
+                time.sleep(0.08)
+
+            report    = f_wx.result()
+            snapshots = f_mem.result()
+
+        s_wx.done(f"{report.desc} · {report.temp_f}°F · hum {report.humidity}%")
+        prev_snap  = find_prev_snapshot(report, snapshots)
+        comp       = compare(prev_snap, report)
+        mem_detail = f"vs {comp.previous_date}" if comp.found else "no prior data"
+        s_mem.done(mem_detail); refresh()
+
+        # ── 5. optional vision ────────────────────────────────────
+        if image_path:
+            img = Path(image_path).expanduser()
+            if img.exists():
+                s_vis = ui.add_step("vision analysis").start(); refresh()
+                vision_note, _ = _stream_chat(
+                    client, AGENT_MODEL,
+                    [
+                        {"role": "system", "content": VISION_SYSTEM},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Analyse this image.\n"
+                                f"Context: {compact_summary(report)}"
+                            ),
+                            "images": [str(img)],
+                        },
+                    ],
+                    ui, refresh, phase="vision", temperature=0.15,
+                )
+                s_vis.done(vision_note[:60]); refresh()
+            else:
+                ui.add_step("vision analysis").skip(f"file not found: {image_path}")
+                refresh()
+
+        # ── 6. generate answer ────────────────────────────────────
+        s_ans = ui.add_step("generate answer").start(); refresh()
+        ctx   = build_context(query, report, comp, vision_note)
+        answer, _ = _stream_chat(
+            client, AGENT_MODEL,
+            [
+                {"role": "system", "content": AGENT_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Using the data below, answer: {query}\n\n"
+                        f"Use the four-section format in your instructions.\n\n"
+                        f"{ctx}"
+                    ),
+                },
+            ],
+            ui, refresh, phase="answer", temperature=0.25,
+        )
+        s_ans.done(answer[:60]); refresh()
+
+        # ── 7. validate ───────────────────────────────────────────
+        s_val = ui.add_step("validate result").start(); refresh()
+        res   = check_result(client, query, answer,
+                             report.queried_location, report.location_label,
+                             ui, refresh)
+        valid = bool(res.get("is_valid", True))
+        score = float(res.get("quality_score", 1.0))
+        notes = str(res.get("notes", ""))
+        issues = res.get("issues", [])
+        val_detail = f"valid={valid}  score={score:.0%}  {notes[:45]}"
+        if issues:
+            val_detail += "  issues: " + "; ".join(issues)[:30]
+        s_val.done(val_detail); refresh()
+
+        # ── 8. save memory ────────────────────────────────────────
+        s_save = ui.add_step("save memory").start(); refresh()
+        snapshots = upsert_snapshot(snapshots, snapshot_from_report(report))
+        save_memory(snapshots)
+        s_save.done(f"{MEMORY_PATH.name}"); refresh()
+
+        ui.running = False; refresh()
+
+    finally:
+        if not harness and live:
+            live.stop()
 
     # ── post-live: full weather card ───────────────────────────────────
     report = _normalize_report(report)
     if report is not None and comp is not None:
-        console.print()
-        console.print(Rule("[bold blue]Weather Report[/bold blue]", style="blue"))
-        print_weather_card(console, report, comp, prev_snap, answer, vision_note)
-        console.print(Rule(style="blue"))
-        console.print()
-        console.print(Panel.fit(
-            f"[dim]memory:[/dim] {MEMORY_PATH}   "
-            f"[dim]geocache:[/dim] {GEOCACHE_PATH}",
-            title="[dim]Run complete[/dim]",
-            border_style="dim",
-        ))
+        if not harness:
+            console.print()
+            console.print(Rule("[bold blue]Weather Report[/bold blue]", style="blue"))
+        
+        print_weather_card(console, report, comp, prev_snap, answer, vision_note, harness=harness)
+        
+        if not harness:
+            console.print(Rule(style="blue"))
+            console.print()
+            console.print(Panel.fit(
+                f"[dim]memory:[/dim] {MEMORY_PATH}   "
+                f"[dim]geocache:[/dim] {GEOCACHE_PATH}",
+                title="[dim]Run complete[/dim]",
+                border_style="dim",
+            ))
 
     return 0 if valid else 2
 
@@ -1671,6 +1680,8 @@ def main() -> int:
                     help="Delete stored snapshots and exit")
     ap.add_argument("--clear-geocache", action="store_true",
                     help="Delete geocode cache and exit")
+    ap.add_argument("--harness", action="store_true",
+                    help="Harness mode: suppress progress TUI, output final report only")
     args = ap.parse_args()
 
     if args.clear_memory:
@@ -1700,7 +1711,7 @@ def main() -> int:
         print("Empty query.")
         return 1
 
-    return run(query, args.image)
+    return run(query, args.image, harness=args.harness)
 
 
 if __name__ == "__main__":
