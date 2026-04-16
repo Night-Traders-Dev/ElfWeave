@@ -148,13 +148,14 @@ class ToolDef:
     fn:          Callable
     signature:   str   # human-readable for planner prompt
 
-    async def call(self, args: dict, ui: UIState, refresh: Callable) -> str:
+    async def call(self, args: dict, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
         try:
-            # We check if the function accepts ui/refresh
+            # We check if the function accepts ui/refresh/client
             params = inspect.signature(self.fn).parameters
             extra = {}
             if "ui" in params: extra["ui"] = ui
             if "refresh" in params: extra["refresh"] = refresh
+            if "client" in params: extra["client"] = client
             
             if inspect.iscoroutinefunction(self.fn):
                 res = await self.fn(**args, **extra)
@@ -214,7 +215,9 @@ def _resolve_args(args: dict, results: list[str]) -> dict:
         if isinstance(v, str):
             def _sub(m: re.Match) -> str:
                 idx = int(m.group(1))
-                return results[idx] if idx < len(results) else m.group(0)
+                if idx < 0 or idx >= len(results):
+                    return f"[error: step_{idx} not found]"
+                return results[idx]
             v = re.sub(r"\{step_(\d+)\}", _sub, v)
         resolved[k] = v
     return resolved
@@ -230,41 +233,57 @@ def tool_echo(text: str) -> str:
 
 
 @register_tool("read_file", "Read a local text file and return its contents.")
-def tool_read_file(path: str) -> str:
+async def tool_read_file(path: str) -> str:
     p = Path(path).expanduser()
-    if not p.exists():
+    if not await asyncio.to_thread(p.exists):
         return f"[error] file not found: {path}"
-    return p.read_text(errors="replace")
+    return await asyncio.to_thread(p.read_text, errors="replace")
 
 
 @register_tool("write_file", "Write text to a local file. Returns the absolute path on success.")
-def tool_write_file(path: str, content: str) -> str:
+async def tool_write_file(path: str, content: str) -> str:
     p = Path(path).expanduser()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content)
+    await asyncio.to_thread(p.parent.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(p.write_text, content)
     return str(p.resolve())
 
 
 @register_tool("http_get", "Fetch a URL via HTTP GET and return the response body (plain text).")
-def tool_http_get(url: str, timeout: int = 15) -> str:
-    req = Request(url, headers={"User-Agent": "harness/1.0"})
-    try:
+async def tool_http_get(url: str, timeout: int = 15) -> str:
+    from urllib.request import Request, urlopen
+    def _sync_get():
+        req = Request(url, headers={"User-Agent": "harness/1.0"})
         with urlopen(req, timeout=timeout) as resp:
             return resp.read().decode(errors="replace")[:8_000]
+    try:
+        return await asyncio.to_thread(_sync_get)
     except Exception as exc:
         return f"[error] {exc}"
 
 
 @register_tool("shell", "Run a shell command and return stdout+stderr (max 4 KB).")
-def tool_shell(cmd: str, timeout: int = 30) -> str:
+async def tool_shell(cmd: str, ui: UIState, refresh: Callable) -> str:
     try:
-        out = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
         )
-        result = (out.stdout + out.stderr).strip()
+        
+        # Read output in chunks to keep UI responsive
+        chunks = []
+        while True:
+            line = await proc.stdout.readline()
+            if not line: break
+            text = line.decode(errors="replace").strip()
+            if text:
+                ui.push_chunk(text)
+                chunks.append(text)
+                refresh()
+                
+        await proc.wait()
+        result = "\n".join(chunks)
         return result[:4_096] or "(no output)"
-    except subprocess.TimeoutExpired:
-        return "[error] command timed out"
     except Exception as exc:
         return f"[error] {exc}"
 
@@ -273,9 +292,7 @@ def tool_shell(cmd: str, timeout: int = 30) -> str:
     "llm_summarize",
     "Summarize a block of text using the planner model. Returns a concise summary.",
 )
-async def tool_llm_summarize(text: str, max_sentences: int = 5) -> str:
-    # Lazy import so the tool works without a live client at import time.
-    client = AsyncClient(host=OLLAMA_URL)
+async def tool_llm_summarize(text: str, client: AsyncClient, max_sentences: int = 5) -> str:
     resp = await client.chat(
         model=PLANNER_MODEL,
         messages=[
@@ -395,18 +412,17 @@ async def tool_knowledge_query(query: str, ui: UIState, refresh: Callable) -> st
 
 
 @register_tool("analyze_failure", "Root-cause diagnosis — analyze why a plan failed and suggest a specific fix for the harness or tool code.")
-async def tool_analyze_failure(issues: str, plan_context: str, ui: UIState, refresh: Callable) -> str:
-    # Use a high-intelligence model for self-diagnosis
-    client = AsyncClient(host=OLLAMA_URL)
+async def tool_analyze_failure(issues: str, plan_context: str, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
     # Target files for self-analysis
     files = list(Path(_root).rglob("*.py"))
     code_context = ""
     for f in files[:5]: # Cap context for prototype
-        code_context += f"\n--- {f.name} ---\n{f.read_text()[:2000]}"
+        content = await asyncio.to_thread(f.read_text, errors="replace")
+        code_context += f"\n--- {f.name} ---\n{content[:2000]}"
     
     prompt = f"Validation Issues: {issues}\n\nPlan Context: {plan_context}\n\nCodebase Context: {code_context}\n\nIdentify the ROOT CAUSE and suggest a specific fix."
     
-    # Using our new streaming _chat_json internally
+    # Using the shared client and streaming chat logic
     res, _ = await _chat_json(
         client,
         PLANNER_MODEL,
@@ -574,7 +590,7 @@ async def execute_plan(
 
         resolved_args = _resolve_args(step.args, result_strings)
         t0 = time.monotonic()
-        out = await _TOOL_REGISTRY[step.tool].call(resolved_args, ui, refresh)
+        out = await _TOOL_REGISTRY[step.tool].call(resolved_args, ui, refresh, client)
         elapsed = (time.monotonic() - t0) * 1000
 
         is_err = out.startswith("[error]") or out.startswith("[tool error]")
