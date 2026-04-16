@@ -51,6 +51,11 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+# Common imports
+from src.common.ui import UIState
+from src.common.ollama import setup_ollama, _stream_chat, _chat_json, _warmup
+from src.common.types import TokenUsage
+
 # ══════════════════════════════════════════════════════════════════════
 #  Config
 # ══════════════════════════════════════════════════════════════════════
@@ -60,12 +65,9 @@ CHECKER_MODEL   = "llama3.2:3b"
 PLANNER_MODEL   = "qwen2.5:3b"
 
 HISTORY_PATH    = Path.home() / ".harness_history.json"
-
 UI_REFRESH_HZ   = 10
 MAX_STREAM_LINES = 8
 DEFAULT_TIMEOUT  = 30
-
-SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 # ══════════════════════════════════════════════════════════════════════
 #  Prompts
@@ -318,325 +320,6 @@ class StepResult:
     elapsed_ms: float = 0.0
     error:      bool  = False
 
-# ══════════════════════════════════════════════════════════════════════
-#  Claude Code-style UI  (matches weather agent exactly)
-# ══════════════════════════════════════════════════════════════════════
-
-@dataclass
-class Step:
-    name:       str
-    state:      str   = "pending"
-    detail:     str   = ""
-    elapsed_ms: float = 0.0
-    cached:     bool  = False
-    _t0: float        = field(default_factory=time.monotonic, repr=False)
-
-    def start(self) -> "Step":
-        self.state = "running"
-        self._t0   = time.monotonic()
-        return self
-
-    def done(self, detail: str = "", cached: bool = False) -> "Step":
-        self.elapsed_ms = (time.monotonic() - self._t0) * 1000
-        self.state  = "done"
-        self.detail = detail
-        self.cached = cached
-        return self
-
-    def error(self, detail: str = "") -> "Step":
-        self.elapsed_ms = (time.monotonic() - self._t0) * 1000
-        self.state  = "error"
-        self.detail = detail
-        return self
-
-    def skip(self, detail: str = "") -> "Step":
-        self.state  = "skipped"
-        self.detail = detail
-        return self
-
-    def render(self, sp_frame: int) -> Text:
-        t = Text()
-        t.append("  ")
-        if self.state == "running":
-            t.append(SPINNER_FRAMES[sp_frame % len(SPINNER_FRAMES)], "bold cyan")
-        elif self.state == "done":
-            t.append("✓", "bold green")
-        elif self.state == "error":
-            t.append("✗", "bold red")
-        elif self.state == "skipped":
-            t.append("–", "dim")
-        else:
-            t.append("·", "dim")
-
-        col   = "white" if self.state != "pending" else "grey50"
-        label = f"  {self.name}"
-        t.append(f"{label:<26}", col)
-
-        if self.detail:
-            preview = self.detail[:50]
-            t.append(preview, "dim")
-
-        if self.elapsed_ms:
-            elapsed = self.elapsed_ms
-            ts = f"{elapsed:.0f}ms" if elapsed < 2000 else f"{elapsed / 1000:.1f}s"
-            padding = max(1, 56 - len(self.name) - len(self.detail[:50]))
-            t.append(" " * padding)
-            t.append(ts, "dim")
-            if self.cached:
-                t.append("  ⚡", "yellow")
-        elif self.state == "running":
-            t.append(f"  {(time.monotonic()-self._t0):.1f}s", "dim")
-
-        return t
-
-
-class UIState:
-    """Owns all mutable display state; thread-safe via a reentrant lock."""
-
-    def __init__(self) -> None:
-        self._lock              = threading.RLock()
-        self.steps:  list[Step] = []
-        self.stream_chunks: list[str] = []
-        self.usage:  dict[str, TokenUsage] = {}
-        self.running: bool = True
-        self._frame:  int  = 0
-
-    def add_step(self, name: str) -> Step:
-        s = Step(name=name)
-        with self._lock:
-            self.steps.append(s)
-        return s
-
-    def push_chunk(self, piece: str) -> None:
-        with self._lock:
-            full = "".join(self.stream_chunks) + piece
-            self.stream_chunks = full.split("\n")[-MAX_STREAM_LINES:]
-
-    def set_usage(self, phase: str, u: TokenUsage) -> None:
-        with self._lock:
-            self.usage[phase] = u
-
-    def clear_stream(self) -> None:
-        with self._lock:
-            self.stream_chunks = []
-
-    def render(self) -> RenderableType:
-        with self._lock:
-            self._frame    = (self._frame + 1) % len(SPINNER_FRAMES)
-            frame   = self._frame
-            steps   = list(self.steps)
-            chunks  = list(self.stream_chunks)
-            usage   = dict(self.usage)
-            running = self.running
-
-        parts: list[Any] = []
-
-        # ── header ────────────────────────────────────────────────────
-        hdr = Text()
-        hdr.append("◆", "bold cyan")
-        hdr.append(" agent-harness", "bold white")
-        hdr.append(f"   {CHECKER_MODEL}", "dim")
-        hdr.append(" · ", "dim")
-        hdr.append(PLANNER_MODEL, "dim")
-        dot = "●" if running else "◉"
-        hdr.append(f"   {dot}", "green" if running else "dim")
-        parts.append(hdr)
-        parts.append(Text(""))
-
-        # ── steps ─────────────────────────────────────────────────────
-        for s in steps:
-            parts.append(s.render(frame))
-
-        # ── streaming output ──────────────────────────────────────────
-        if any(c.strip() for c in chunks):
-            parts.append(Text(""))
-            parts.append(Text("  " + "─" * 64, "dim"))
-            for i, line in enumerate(chunks):
-                row = Text("  ")
-                row.append(line, "white")
-                if i == len(chunks) - 1 and running:
-                    row.append("▌", "blink bold cyan")
-                parts.append(row)
-            parts.append(Text("  " + "─" * 64, "dim"))
-
-        # ── footer ────────────────────────────────────────────────────
-        parts.append(Text(""))
-        total_tok = sum(u.total_tokens for u in usage.values())
-        gen_tok   = sum(u.completion_tokens for u in usage.values())
-        foot = Text("  ")
-        foot.append("esc", "bold dim")
-        foot.append(" to interrupt", "dim")
-        if total_tok:
-            foot.append(
-                f"  ·  prompt {total_tok - gen_tok:,}  gen {gen_tok:,}  total {total_tok:,}",
-                "dim",
-            )
-        active = next((s for s in steps if s.state == "running"), None)
-        if active:
-            foot.append(f"  ·  {time.monotonic() - active._t0:.1f}s", "dim")
-        parts.append(foot)
-
-        return Group(*parts)
-
-
-# ══════════════════════════════════════════════════════════════════════
-#  Ollama helpers
-# ══════════════════════════════════════════════════════════════════════
-
-def _wait_ollama(client: Client, timeout: int = 30) -> None:
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        try:
-            client.list()
-            return
-        except Exception:
-            time.sleep(1)
-    raise RuntimeError(f"Ollama not reachable after {timeout}s")
-
-
-def _ensure_model(client: Client, model: str) -> None:
-    try:
-        client.show(model)
-    except ResponseError as exc:
-        if getattr(exc, "status_code", None) == 404 or "not found" in str(exc).lower():
-            print(f"  ↓ Pulling {model}…")
-            client.pull(model)
-        else:
-            raise
-
-
-def _warmup(client: Client, model: str) -> None:
-    try:
-        client.chat(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            options={"num_predict": 1, "num_gpu": 99},
-        )
-    except Exception:
-        pass
-
-
-def setup_ollama() -> Client:
-    client = Client(host=OLLAMA_URL)
-    try:
-        client.list()
-    except Exception:
-        subprocess.Popen(
-            ["ollama", "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        _wait_ollama(client)
-    for m in {CHECKER_MODEL, PLANNER_MODEL}:
-        _ensure_model(client, m)
-    return client
-
-
-def _get(obj: Any, key: str, default: Any = None) -> Any:
-    return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
-
-
-def _msg_content(resp: Any) -> str:
-    msg = _get(resp, "message", {})
-    c = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
-    return c or ""
-
-
-def _usage_from(resp: Any) -> TokenUsage:
-    return TokenUsage(
-        prompt_tokens     = int(_get(resp, "prompt_eval_count", 0) or 0),
-        completion_tokens = int(_get(resp, "eval_count", 0) or 0),
-        total_duration_ms = float(_get(resp, "total_duration", 0) or 0) / 1_000_000,
-        estimated         = False,
-    )
-
-
-def _est_tokens(text: str) -> int:
-    return max(1, len(text.strip()) // 4)
-
-
-def _chat_json(
-    client: Client,
-    model: str,
-    system: str,
-    user: str,
-    ui: UIState,
-    refresh: Any,
-    phase: str,
-    retries: int = 2,
-) -> tuple[dict, TokenUsage]:
-    last = ""
-    u = TokenUsage()
-    for attempt in range(retries + 1):
-        resp = client.chat(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user},
-            ],
-            options={"temperature": 0.05, "num_gpu": 99},
-        )
-        u = _usage_from(resp)
-        ui.set_usage(phase, u)
-        refresh()
-        raw = re.sub(r"```(?:json)?|```", "", _msg_content(resp).strip()).strip()
-        last = raw
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group()), u
-            except json.JSONDecodeError:
-                pass
-        if attempt < retries:
-            user += "\n\nReturn ONLY the JSON object. No prose."
-    raise ValueError(f"No valid JSON from {model}: {last!r}")
-
-
-def _stream_chat(
-    client: Client,
-    model: str,
-    messages: list[dict],
-    ui: UIState,
-    refresh: Any,
-    phase: str,
-    temperature: float = 0.25,
-) -> tuple[str, TokenUsage]:
-    ui.clear_stream()
-    est = TokenUsage(
-        prompt_tokens     = sum(_est_tokens(
-            m.get("content", "") if isinstance(m.get("content"), str)
-            else json.dumps(m.get("content", ""))
-        ) for m in messages),
-        completion_tokens = 0,
-        estimated         = True,
-    )
-    ui.set_usage(phase, est)
-
-    parts: list[str] = []
-    final_u = est
-
-    for chunk in client.chat(
-        model=model,
-        messages=messages,
-        stream=True,
-        options={"temperature": temperature, "num_gpu": 99},
-    ):
-        piece = _msg_content(chunk)
-        if piece:
-            parts.append(piece)
-            ui.push_chunk(piece)
-            cur = ui.usage.get(phase, est)
-            cur.completion_tokens = _est_tokens("".join(parts))
-            ui.set_usage(phase, cur)
-        if _get(chunk, "eval_count", None) is not None:
-            final_u = _usage_from(chunk)
-        refresh()
-
-    if final_u.estimated and parts:
-        final_u.completion_tokens = _est_tokens("".join(parts))
-    ui.set_usage(phase, final_u)
-    refresh()
-    return "".join(parts).strip(), final_u
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -874,7 +557,7 @@ def print_result_card(
 
 def run(query: str, dry_run: bool = False) -> int:
     console = Console()
-    ui      = UIState()
+    ui      = UIState(agent_name="agent-harness", model_info=f"{CHECKER_MODEL} · {PLANNER_MODEL}")
 
     plan: list[PlanStep]       = []
     results: list[StepResult]  = []
@@ -891,7 +574,7 @@ def run(query: str, dry_run: bool = False) -> int:
         try:
             # ── 1. connect + warmup ───────────────────────────────────
             s_init = ui.add_step("connect + warmup").start(); refresh()
-            client = setup_ollama()
+            client = setup_ollama(OLLAMA_URL, [CHECKER_MODEL, PLANNER_MODEL])
             with ThreadPoolExecutor(max_workers=2) as wp:
                 wp.submit(_warmup, client, CHECKER_MODEL)
                 wp.submit(_warmup, client, PLANNER_MODEL)
