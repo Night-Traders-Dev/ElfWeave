@@ -639,23 +639,15 @@ async def validate_result(
 # ══════════════════════════════════════════════════════════════════════
 
 def print_result_card(
-    console: Console,
+    ui: UIState,
     query: str,
     plan: list[PlanStep],
     results: list[StepResult],
     rationale: str,
     validation: dict,
 ) -> None:
-    console.print()
-    console.print(Rule("[bold blue]Harness Result[/bold blue]", style="blue"))
-
-    # Plan summary table
-    tbl = Table(
-        show_header=True,
-        header_style="bold blue",
-        box=None,
-        padding=(0, 2),
-    )
+    # ── Plan Table ──
+    tbl = Table(show_header=True, header_style="bold blue", box=None, padding=(0, 2))
     tbl.add_column("#",    style="dim",        width=4)
     tbl.add_column("Tool", style="cyan bold",  width=18)
     tbl.add_column("Description",              width=34)
@@ -665,34 +657,16 @@ def print_result_card(
     for i, r in enumerate(results):
         status = "[red]error[/red]" if r.error else "[green]ok[/green]"
         preview = r.output[:35].replace("\n", " ") + ("…" if len(r.output) > 35 else "")
-        tbl.add_row(
-            str(i),
-            r.plan_step.tool,
-            r.plan_step.description[:34],
-            status,
-            preview,
-        )
+        tbl.add_row(str(i), r.plan_step.tool, r.plan_step.description[:34], status, preview)
 
-    console.print(
-        Panel(tbl, title="[bold]Execution plan[/bold]",
-              subtitle=f"[dim]{rationale[:80]}[/dim]",
-              border_style="blue", padding=(1, 2))
-    )
+    ui.print_card("Execution Plan", tbl, border_color="blue", metadata=rationale[:80])
 
-    # Final output of last step
+    # ── Final Output ──
     if results:
         final_out = results[-1].output
-        console.print(
-            Panel(
-                Text.from_ansi(final_out[:8000]),
-                title="[bold]Final output[/bold]",
-                border_style="green",
-                padding=(1, 2),
-                expand=False
-            )
-        )
+        ui.print_card("Final Output", Text.from_ansi(final_out[:8000]), border_color="green")
 
-    # Validation panel
+    # ── Validation ──
     aligned = validation.get("aligned", True)
     score   = float(validation.get("quality_score", 1.0))
     notes   = validation.get("notes", "")
@@ -706,21 +680,7 @@ def print_result_card(
     if issues:
         val_lines.append("\n  issues: " + " · ".join(str(x) for x in issues[:3]), "yellow")
 
-    console.print(
-        Panel(val_lines,
-              title="[bold]Validation[/bold]",
-              border_style=val_color,
-              padding=(0, 2))
-    )
-    console.print(Rule(style="blue"))
-    console.print()
-    console.print(
-        Panel.fit(
-            f"[dim]history:[/dim] {HISTORY_PATH}",
-            title="[dim]Run complete[/dim]",
-            border_style="dim",
-        )
-    )
+    ui.print_card("Validation Result", val_lines, border_color=val_color)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -728,7 +688,6 @@ def print_result_card(
 # ══════════════════════════════════════════════════════════════════════
 
 async def run(query: str, dry_run: bool = False) -> int:
-    console = Console()
     ui      = UIState(agent_name="agent-harness", model_info=f"{CHECKER_MODEL} · {PLANNER_MODEL} · {REVIEW_MODEL}")
 
     plan: list[PlanStep]       = []
@@ -740,11 +699,9 @@ async def run(query: str, dry_run: bool = False) -> int:
     max_retries = 2
     last_feedback = ""
 
-    with Live(ui.render(), refresh_per_second=UI_REFRESH_HZ,
-              console=console, screen=False) as live:
-
+    async with ui:
         def refresh() -> None:
-            live.update(ui.render())
+            ui.refresh()
 
         try:
             # ── 1. connect + warmup ───────────────────────────────────
@@ -782,7 +739,6 @@ async def run(query: str, dry_run: bool = False) -> int:
                 ui.push_chunk(
                     f"This query is outside the current tool suite.\n{reason}"
                 )
-                ui.running = False; refresh()
                 return 1
 
             while retry_count <= max_retries and not aligned:
@@ -797,14 +753,12 @@ async def run(query: str, dry_run: bool = False) -> int:
 
                 if not plan:
                     ui.push_chunk("Planner returned an empty plan.")
-                    ui.running = False; refresh()
                     return 1
 
                 if dry_run:
                     # Print the plan and exit without executing
                     for i, step in enumerate(plan):
                         ui.add_step(f"  step {i}  [{step.tool}]").skip(step.description[:50])
-                    ui.running = False; refresh()
                     return 0
 
                 # ── 4. execute ────────────────────────────────────────────
@@ -852,15 +806,12 @@ async def run(query: str, dry_run: bool = False) -> int:
             ui.add_step("interrupted").error("KeyboardInterrupt"); refresh()
             return 130
         except Exception as exc:
-            ui.running = False
             ui.add_step("fatal error").error(str(exc)[:80]); refresh()
             raise
 
     # ── post-live: result card ─────────────────────────────────────────
     if results and not dry_run:
-        print_result_card(
-            console, query, plan, results, rationale, validation
-        )
+        print_result_card(ui, query, plan, results, rationale, validation)
 
     return 0 if aligned else 2
 

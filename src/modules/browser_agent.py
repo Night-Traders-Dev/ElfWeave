@@ -37,17 +37,12 @@ UI_REFRESH_HZ   = 10
 # ══════════════════════════════════════════════════════════════════════
 
 async def run(query: str, model: str, harness: bool = False) -> int:
-    console = Console()
     ui      = UIState(agent_name="browser-agent", model_info=f"{model}")
+    if harness: ui.harness_mode = True
     
-    if harness:
-        def refresh() -> None: pass
-        live = None
-    else:
-        live = Live(ui.render(), refresh_per_second=UI_REFRESH_HZ, console=console, screen=False)
-        live.start()
+    async with ui:
         def refresh() -> None:
-            if live: live.update(ui.render())
+            ui.refresh()
 
     try:
         s_init = ui.add_step("connect + warmup").start(); refresh()
@@ -70,20 +65,15 @@ async def run(query: str, model: str, harness: bool = False) -> int:
         if expert_manual:
             final_task = f"ADHERE TO THESE PROTOCOLS:\n{expert_manual}\n\nTASK:\n{query}"
 
-        result = await execute_browser_task(final_task, model, OLLAMA_URL, ui, refresh, harness=harness)
-        
-        ui.running = False; refresh()
-        
-        if not harness:
-            console.print("\n[bold green]Browser Agent Result:[/bold green]")
-            console.print(result)
+            result = await execute_browser_task(final_task, model, OLLAMA_URL, ui, refresh, harness=harness)
             
-        return 0
-    except Exception as e:
-        ui.add_step("fatal error").error(str(e)); refresh()
-        return 1
-    finally:
-        if not harness and live: live.stop()
+            if not harness:
+                ui.print_card("Browser Result", result, border_color="green", metadata=f"Task: {query[:50]}...")
+                
+            return 0
+        except Exception as e:
+            ui.add_step("fatal error").error(str(e)); refresh()
+            return 1
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Autonomous Browser Agent")

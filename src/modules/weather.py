@@ -294,8 +294,8 @@ def print_weather_card(
 # ══════════════════════════════════════════════════════════════════════
 
 async def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> int:
-    console = Console()
     ui      = UIState(agent_name="weather-agent", model_info=f"{AGENT_MODEL} · {CHECKER_MODEL}")
+    if harness: ui.harness_mode = True
 
     report:     Optional[WeatherReport]    = None
     comp:       Optional[WeatherComparison]= None
@@ -304,14 +304,9 @@ async def run(query: str, image_path: Optional[str] = None, harness: bool = Fals
     vision_note = ""
     expert_manual = ""
 
-    if harness:
-        def refresh() -> None: pass
-        live = None
-    else:
-        live = Live(ui.render(), refresh_per_second=UI_REFRESH_HZ, console=console, screen=False)
-        live.start()
+    async with ui:
         def refresh() -> None:
-            if live: live.update(ui.render())
+            ui.refresh()
 
     try:
         s_init = ui.add_step("connect + warmup").start(); refresh()
@@ -399,13 +394,9 @@ async def run(query: str, image_path: Optional[str] = None, harness: bool = Fals
         save_memory(snapshots)
         s_save.done("memory updated"); refresh()
 
-        ui.running = False; refresh()
-    finally:
-        if not harness and live: live.stop()
-
     if report and comp:
-        if not harness: console.print()
-        print_weather_card(console, report, comp, prev_snap, answer, vision_note, harness=harness)
+        if not harness: ui.console.print()
+        print_weather_card(ui.console, report, comp, prev_snap, answer, vision_note, harness=harness)
     return 0
 
 async def main() -> None:

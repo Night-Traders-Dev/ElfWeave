@@ -62,40 +62,28 @@ async def main() -> None:
     parser.add_argument("--harness", action="store_true", help="Harness mode")
     args = parser.parse_args()
     
-    console = Console()
     ui = UIState(agent_name="knowledge-agent", model_info="Local FAISS + MiniLM")
-    
-    if args.harness:
-        def refresh() -> None: pass
-        live = None
-    else:
-        live = Live(ui.render(), refresh_per_second=10, console=console, screen=False)
-        live.start()
-        def refresh() -> None:
-            if live: live.update(ui.render())
+    if args.harness: ui.harness_mode = True
 
-    try:
-        if args.index:
-            await run_index(args.index, ui, refresh)
-            if not args.harness:
-                print("\n[bold green]Indexing complete.[/bold green]")
-        
-        if args.query:
-            result = await run_query(args.query, ui, refresh, harness=args.harness)
-            if not args.harness:
-                console.print(Panel(result, title="Search Results"))
-            else:
-                # In harness mode, we output the result to stdout for capture
-                print(result)
-                
-        ui.running = False; refresh()
-        if not args.harness and live:
-            live.stop()
-    except Exception as e:
-        ui.add_step("fatal error").error(str(e)); refresh()
-        if not args.harness and live:
-            live.stop()
-        sys.exit(1)
+    async with ui:
+        def refresh() -> None:
+            ui.refresh()
+
+        try:
+            if args.index:
+                await run_index(args.index, ui, refresh)
+            
+            if args.query:
+                result = await run_query(args.query, ui, refresh, harness=args.harness)
+                if not args.harness:
+                    ui.print_card("Search Results", result, border_color="blue", metadata=f"Query: {args.query}")
+                else:
+                    # In harness mode, we output the result to stdout for capture
+                    print(result)
+                    
+        except Exception as e:
+            ui.add_step("fatal error").error(str(e)); refresh()
+            sys.exit(1)
 
 if __name__ == "__main__":
     asyncio.run(main())

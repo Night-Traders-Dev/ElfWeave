@@ -1,10 +1,14 @@
 import threading
 import time
+import asyncio
 from dataclasses import dataclass, field
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict, Optional, Callable
 
-from rich.console import Group, RenderableType
+from rich.console import Group, RenderableType, Console
 from rich.text import Text
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.live import Live
 
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -45,8 +49,8 @@ class Step:
         t = Text()
         t.append("  ")
         if self.state == "running":
-            frame = int(time.monotonic() * 10) % len(SPINNER_FRAMES)
-            t.append(SPINNER_FRAMES[frame], "bold cyan")
+            # Synchronized with UIState frame timing
+            t.append(SPINNER_FRAMES[sp_frame], "bold cyan")
         elif self.state == "done":
             t.append("✓", "bold green")
         elif self.state == "error":
@@ -79,18 +83,44 @@ class Step:
 
 
 class UIState:
-    """Owns all mutable display state; thread-safe via a reentrant lock."""
+    """
+    Standardized UI orchestrator for ElfWeave agents.
+    Provides an async context manager for Live display management.
+    """
 
-    def __init__(self, agent_name: str, model_info: str = "", max_stream_lines: int = 8) -> None:
+    def __init__(self, agent_name: str, model_info: str = "", max_stream_lines: int = 8, refresh_hz: int = 10) -> None:
         self._lock         = threading.RLock()
         self.agent_name    = agent_name
         self.model_info    = model_info
         self.max_stream_lines = max_stream_lines
+        self.refresh_hz    = refresh_hz
         self.steps:   List[Step]              = []
         self.stream_chunks: List[str]         = []
         self.usage:   Dict[str, Any]          = {}  # TokenUsage
         self.running: bool                    = True
-        self._frame:  int                     = 0
+        
+        self.console = Console()
+        self.live: Optional[Live] = None
+        self.harness_mode: bool = False
+
+    async def __aenter__(self) -> "UIState":
+        """Start the Live display automatically unless in harness mode."""
+        if not self.harness_mode:
+            self.live = Live(self.render(), refresh_per_second=self.refresh_hz, console=self.console, screen=False)
+            self.live.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Stop the Live display and cleanup."""
+        self.running = False
+        self.refresh()
+        if self.live:
+            self.live.stop()
+
+    def refresh(self) -> None:
+        """Update the TUI render."""
+        if self.live:
+            self.live.update(self.render())
 
     def add_step(self, name: str) -> Step:
         s = Step(name=name)
@@ -113,6 +143,7 @@ class UIState:
 
     def render(self) -> RenderableType:
         with self._lock:
+            # Absolute frame timing synchronized across all render calls
             frame   = int(time.monotonic() * 10) % len(SPINNER_FRAMES)
             steps   = list(self.steps)
             chunks  = list(self.stream_chunks)
@@ -151,7 +182,7 @@ class UIState:
 
         # ── footer ────────────────────────────────────────────────────
         parts.append(Text(""))
-        total_tok = sum(u.total_tokens for u in usage.values() if hasattr(u, 'total_tokens'))
+        total_tok = sum(u.prompt_tokens + u.completion_tokens for u in usage.values() if hasattr(u, 'prompt_tokens'))
         gen_tok   = sum(u.completion_tokens for u in usage.values() if hasattr(u, 'completion_tokens'))
         foot = Text("  ")
         foot.append("esc", "bold dim")
@@ -164,3 +195,20 @@ class UIState:
         parts.append(foot)
 
         return Group(*parts)
+
+    def print_card(self, title: str, content: Any, border_color: str = "blue", metadata: Optional[str] = None) -> None:
+        """Print a standard premium result card in the Claude Code / Weather UI style."""
+        self.console.print()
+        self.console.print(Rule(f"[bold {border_color}]{title}[/bold {border_color}]", style=border_color))
+        
+        self.console.print(
+            Panel(
+                content,
+                border_style=border_color,
+                padding=(1, 2),
+                expand=False,
+                subtitle=f"[dim]{metadata}[/dim]" if metadata else None
+            )
+        )
+        self.console.print(Rule(style=border_color))
+        self.console.print()

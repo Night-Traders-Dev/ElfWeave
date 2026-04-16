@@ -40,49 +40,36 @@ UI_REFRESH_HZ   = 10
 # ══════════════════════════════════════════════════════════════════════
 
 async def run_monitor(log_path: Path, model: str, host: str) -> int:
-    console = Console()
     ui = UIState(agent_name="monitor-agent", model_info=f"{model}")
     
-    live = Live(ui.render(), refresh_per_second=UI_REFRESH_HZ, console=console, screen=False)
-    live.start()
-    
-    def refresh() -> None:
-        if live: live.update(ui.render())
-    
-    try:
-        s_init = ui.add_step("connect + warmup").start(); refresh()
-        client = await setup_ollama(host, [model])
-        s_init.done("monitoring active"); refresh()
+    async with ui:
+        def refresh() -> None:
+            ui.refresh()
         
-        # Store history for the UI
-        history: List[dict] = []
-        
-        # Start the async tailing loop
-        async for line in tail_file(log_path):
-            if not line.strip(): continue
+        try:
+            s_init = ui.add_step("connect + warmup").start(); refresh()
+            client = await setup_ollama(host, [model])
+            s_init.done("monitoring active"); refresh()
             
-            # When a new line arrives, classify it using the LLM
-            s_ana = ui.add_step("analyzing log").start(); refresh()
-            res = await classify_log_line(client, model, line, ui, refresh)
-            s_ana.done(f"{res.get('severity', 'info').upper()} · {res.get('intent', 'unknown')}")
-            
-            # Add to history (max 10)
-            history.append({"time": time.ctime(), "line": line[:80], "res": res})
-            if len(history) > 10: history.pop(0)
-            
-            # Push chunk to TUI
-            col = "red" if res.get('severity') == 'error' else "yellow" if res.get('severity') == 'warn' else "white"
-            ui.push_chunk(f"[{col}]{res.get('summary', line[:60])}[/]")
-            refresh()
-            
-            # Tiny sleep to ensure UI loop gets a chance if logs are fast
-            await asyncio.sleep(0.01)
+            # Start the async tailing loop
+            async for line in tail_file(log_path):
+                if not line.strip(): continue
+                
+                # When a new line arrives, classify it using the LLM
+                s_ana = ui.add_step("analyzing log").start(); refresh()
+                res = await classify_log_line(client, model, line, ui, refresh)
+                s_ana.done(f"{res.get('severity', 'info').upper()} · {res.get('intent', 'unknown')}")
+                
+                # Push chunk to TUI
+                col = "red" if res.get('severity') == 'error' else "yellow" if res.get('severity') == 'warn' else "white"
+                ui.push_chunk(f"[{col}]{res.get('summary', line[:60])}[/]")
+                refresh()
+                
+                # Tiny sleep to ensure UI loop gets a chance if logs are fast
+                await asyncio.sleep(0.01)
 
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        if live:
-            live.stop()
+        except KeyboardInterrupt:
+            pass
     return 0
 
 async def main() -> None:
