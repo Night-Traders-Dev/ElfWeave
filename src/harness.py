@@ -370,6 +370,27 @@ def tool_knowledge_query(query: str) -> str:
         return f"[tool error] query failed: {out.stderr.strip()[:500]}"
     return out.stdout.strip()
 
+
+@register_tool("analyze_failure", "Root-cause diagnosis — analyze why a plan failed and suggest a specific fix for the harness or tool code.")
+def tool_analyze_failure(issues: str, plan_context: str) -> str:
+    # Use a high-intelligence model for self-diagnosis
+    client = Client(host=OLLAMA_URL)
+    # Target files for self-analysis
+    files = list(Path(_root).rglob("*.py"))
+    code_context = ""
+    for f in files[:5]: # Cap context for prototype
+        code_context += f"\n--- {f.name} ---\n{f.read_text()[:2000]}"
+    
+    prompt = f"Validation Issues: {issues}\n\nPlan Context: {plan_context}\n\nCodebase Context: {code_context}\n\nIdentify the ROOT CAUSE and suggest a specific fix."
+    
+    resp = client.chat(
+        model=PLANNER_MODEL,
+        messages=[{"role": "system", "content": "You are a self-healing AI coordinator. Identify the root cause of failures."},
+                  {"role": "user", "content": prompt}]
+    )
+    msg = resp.get("message", {}) if isinstance(resp, dict) else resp.message
+    return (msg.get("content", "") if isinstance(msg, dict) else msg.content).strip()
+
 # ══════════════════════════════════════════════════════════════════════
 #  Data models
 # ══════════════════════════════════════════════════════════════════════
@@ -419,6 +440,25 @@ def save_history(entries: list[dict]) -> None:
     HISTORY_PATH.write_text(json.dumps(entries[-50:], indent=2))  # keep last 50
 
 
+def get_relevant_history(query: str, limit: int = 3) -> str:
+    """Finds previous similar tasks and their outcomes for 'learning'."""
+    history = load_history()
+    if not history:
+        return "No prior project history available."
+    
+    # Simple recent-history strategy for the prototype
+    # In a full RAG version, we'd use KnowledgeAgent to find semantically similar queries.
+    relevant = history[-limit:]
+    lines = []
+    for h in relevant:
+        q = h.get("query", "unknown")
+        s = h.get("score", 0.0)
+        a = "Success" if h.get("aligned") else "Failed"
+        lines.append(f"  - Query: {q}\n    Outcome: {a} (Score: {s:.0%})")
+    
+    return "\n".join(lines)
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Core pipeline functions
 # ══════════════════════════════════════════════════════════════════════
@@ -446,6 +486,7 @@ def make_plan(
     relevant_tools: list[str],
     ui: UIState,
     refresh: Any,
+    feedback: Optional[str] = None,
 ) -> tuple[list[PlanStep], str]:
     # Restrict catalogue to relevant tools only (keeps context tight)
     catalogue_lines = []
@@ -454,10 +495,17 @@ def make_plan(
             catalogue_lines.append(f"  • {td.signature}\n    {td.description}")
     catalogue = "\n".join(catalogue_lines) or _tool_catalogue()
 
+    history_context = get_relevant_history(query)
+
     user_msg = (
         f"Query: {query}\n\n"
-        f"Available tools:\n{catalogue}"
+        f"Available tools:\n{catalogue}\n\n"
+        f"Past Lessons Learned:\n{history_context}"
     )
+    
+    if feedback:
+        user_msg += f"\n\nCRITICAL: Previous attempt failed with these issues:\n{feedback}\nDO NOT repeat the same mistakes. Adjust your strategy."
+
     result, _ = _chat_json(
         client, PLANNER_MODEL, PLANNER_SYSTEM, user_msg, ui, refresh, "plan"
     )
@@ -644,7 +692,10 @@ def run(query: str, dry_run: bool = False) -> int:
     results: list[StepResult]  = []
     rationale  = ""
     validation: dict           = {}
-    aligned    = True
+    aligned    = False
+    retry_count = 0
+    max_retries = 2
+    last_feedback = ""
 
     with Live(ui.render(), refresh_per_second=UI_REFRESH_HZ,
               console=console, screen=False) as live:
@@ -687,47 +738,52 @@ def run(query: str, dry_run: bool = False) -> int:
                 ui.running = False; refresh()
                 return 1
 
-            # ── 3. plan ───────────────────────────────────────────────
-            s_plan = ui.add_step("build plan").start(); refresh()
-            plan, rationale = make_plan(client, query, rel_tools, ui, refresh)
-            s_plan.done(
-                f"{len(plan)} step{'s' if len(plan) != 1 else ''}  ·  "
-                + rationale[:40]
-            )
-            refresh()
+            while retry_count <= max_retries and not aligned:
+                # ── 3. plan ───────────────────────────────────────────
+                s_plan = ui.add_step(f"plan (attempt {retry_count})").start(); refresh()
+                plan, rationale = make_plan(client, query, rel_tools, ui, refresh, feedback=last_feedback)
+                s_plan.done(
+                    f"{len(plan)} step{'s' if len(plan) != 1 else ''}  ·  "
+                    + rationale[:40]
+                )
+                refresh()
 
-            if not plan:
-                ui.push_chunk("Planner returned an empty plan.")
-                ui.running = False; refresh()
-                return 1
+                if not plan:
+                    ui.push_chunk("Planner returned an empty plan.")
+                    ui.running = False; refresh()
+                    return 1
 
-            if dry_run:
-                # Print the plan and exit without executing
-                for i, step in enumerate(plan):
-                    ui.add_step(f"  step {i}  [{step.tool}]").skip(step.description[:50])
-                ui.running = False; refresh()
-                return 0
+                if dry_run:
+                    # Print the plan and exit without executing
+                    for i, step in enumerate(plan):
+                        ui.add_step(f"  step {i}  [{step.tool}]").skip(step.description[:50])
+                    ui.running = False; refresh()
+                    return 0
 
-            # ── 4. execute ────────────────────────────────────────────
-            results = execute_plan(plan, ui, refresh)
+                # ── 4. execute ────────────────────────────────────────────
+                results = execute_plan(plan, ui, refresh)
 
-            # ── 5. validate ───────────────────────────────────────────
-            s_val = ui.add_step("validate result").start(); refresh()
-            validation = validate_result(client, query, results, ui, refresh)
-            aligned    = bool(validation.get("aligned", True))
-            score      = float(validation.get("quality_score", 1.0))
-            notes      = str(validation.get("notes", ""))
-            issues     = validation.get("issues", [])
+                # ── 5. validate ───────────────────────────────────────────
+                s_val = ui.add_step(f"validate (attempt {retry_count})").start(); refresh()
+                validation = validate_result(client, query, results, ui, refresh)
+                aligned    = bool(validation.get("aligned", True))
+                score      = float(validation.get("quality_score", 1.0))
+                notes      = str(validation.get("notes", ""))
+                issues     = validation.get("issues", [])
 
-            val_detail = f"{'✓' if aligned else '✗'}  score={score:.0%}  {notes[:45]}"
-            if issues:
-                val_detail += "  issues: " + "; ".join(str(x) for x in issues)[:30]
+                val_detail = f"{'✓' if aligned else '✗'}  score={score:.0%}  {notes[:45]}"
+                if issues:
+                    val_detail += "  issues: " + "; ".join(str(x) for x in issues)[:30]
+                    last_feedback = f"Validation issues: {'; '.join(str(x) for x in issues)}. Notes: {notes}"
 
-            if aligned:
-                s_val.done(val_detail)
-            else:
-                s_val.error(val_detail)
-            refresh()
+                if aligned or score >= 0.7:
+                    s_val.done(val_detail)
+                    aligned = True # Close the loop
+                else:
+                    s_val.error(val_detail)
+                    retry_count += 1
+                
+                refresh()
 
             # ── 6. save history ───────────────────────────────────────
             s_save = ui.add_step("save history").start(); refresh()
