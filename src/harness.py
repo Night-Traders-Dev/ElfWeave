@@ -526,10 +526,11 @@ def print_result_card(
         final_out = results[-1].output
         console.print(
             Panel(
-                Text(final_out[:2_000]),
+                Text.from_ansi(final_out[:8000]),
                 title="[bold]Final output[/bold]",
                 border_style="green",
                 padding=(1, 2),
+                expand=False
             )
         )
 

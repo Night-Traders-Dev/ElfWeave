@@ -76,10 +76,10 @@ AGENT_SYSTEM = dedent("""\
       7. If the signal is weak or mixed, say so directly instead of overstating confidence.
       8. Use rain chance, cloud cover, pressure, wind, UV, and temp progression when describing trends.
       9. Format your response as four sections, each starting on a new line:
-           CURRENT: one-sentence summary with key numbers
+           CURRENT: one-sentence summary with observation date and key numbers
            CHANGES: how it changed vs yesterday (if data exists)
            HOURLY: 2-3 sentence narrative on the day's progression
-           OUTLOOK: summary of the 3-day forecast
+           OUTLOOK: summary of the 3-day forecast window (e.g. Oct 14-16)
 """)
 
 VISION_SYSTEM = "You are a weather-satellite and radar-image analyst. Describe the key visual features."
@@ -162,7 +162,7 @@ def print_weather_card(
     harness: bool = False,
 ) -> None:
     em, ccol = _cstyle(r.desc)
-    hdr = Text(justify="center")
+    hdr = Text(justify="left" if harness else "center")
     hdr.append(f"\n  {em}  ", f"bold {ccol}")
     hdr.append(r.queried_location, "bold white")
     if r.location_label and r.location_label != r.queried_location:
@@ -172,7 +172,9 @@ def print_weather_card(
     if r.obs_time:
         hdr.append(f"\n  Observed {_obs_to_local(r.obs_time, r.tz_name)}", "grey50")
     hdr.append("\n")
-    console.print(Panel(hdr, border_style="blue", box=box.SIMPLE if harness else box.DOUBLE_EDGE))
+    console.print(Panel(hdr, border_style="blue", 
+                        expand=False if harness else True,
+                        box=box.SIMPLE if harness else box.DOUBLE_EDGE))
 
     L = Table.grid(padding=(0, 2)); L.add_column(style="grey58", min_width=15); L.add_column(style="bold white")
     R = Table.grid(padding=(0, 2)); R.add_column(style="grey58", min_width=15); R.add_column(style="bold white")
@@ -192,12 +194,13 @@ def print_weather_card(
     R.add_row("🌧 Precip",      Text(f"{r.precip_in} in",       "sky_blue1"))
     R.add_row("🌥 Cloud cover", Text(f"{_bar(r.cloud_cover)}  {r.cloud_cover}%", "grey74"))
 
-    console.print(Panel(Columns([L, R], equal=True, expand=True),
+    console.print(Panel(Columns([L, R], equal=True, expand=not harness),
                         title="[bold]Current Conditions[/bold]",
+                        expand=False if harness else True,
                         border_style=ccol, box=box.SIMPLE if harness else box.ROUNDED))
 
     if r.forecast and r.forecast[0].hourly:
-        ht = Table(box=box.SIMPLE_HEAD, expand=True, show_header=True, header_style="bold white")
+        ht = Table(box=box.SIMPLE_HEAD, expand=not harness, show_header=True, header_style="bold white")
         ht.add_column("Time",       style="bold white", min_width=6)
         ht.add_column("Conditions", min_width=18)
         ht.add_column("Temp",       justify="right", style="bold")
@@ -225,6 +228,7 @@ def print_weather_card(
                 f"{slot.snow_chance}%", f"{slot.cloud_cover}%", style=row_style)
 
         console.print(Panel(ht, title=f"[bold]Today's Hourly Forecast[/bold]",
+                            expand=False if harness else True,
                             border_style="cyan", box=box.SIMPLE if harness else box.ROUNDED))
 
     if comp.found and prev_snap:
@@ -238,13 +242,16 @@ def print_weather_card(
             delta = Text("changed", "yellow") if unit is None and old != new else Text("same", "grey50") if unit is None else _delta_text(new, old, unit)
             dt.add_row(label, str(old), str(new), delta)
         console.print(Panel(dt, title=f"[bold]vs {comp.previous_date}[/bold]",
+                            expand=False if harness else True,
                             border_style="magenta", box=box.SIMPLE if harness else box.ROUNDED))
     elif not comp.found:
         console.print(Panel(Text("No prior snapshot — run again tomorrow to compare.", "grey50"),
-                            title="[bold]Prior-Day Comparison[/bold]", border_style="grey35", box=box.ROUNDED))
+                            title="[bold]Prior-Day Comparison[/bold]", 
+                            expand=False if harness else True,
+                            border_style="grey35", box=box.ROUNDED))
 
     if r.forecast:
-        ft = Table(box=box.SIMPLE_HEAD, expand=True, show_header=True, header_style="bold white")
+        ft = Table(box=box.SIMPLE_HEAD, expand=not harness, show_header=True, header_style="bold white")
         ft.add_column("Day",       style="bold white", min_width=18); ft.add_column("Conditions")
         ft.add_column("High",      justify="right", style="bold red"); ft.add_column("Low",       justify="right", style="bold cyan")
         ft.add_column("UV",        justify="center"); ft.add_column("🌧 Rain",   justify="right", style="sky_blue1")
@@ -257,10 +264,13 @@ def print_weather_card(
                 f"{day.high_f}°F", f"{day.low_f}°F", Text(_uv_label(day.uv_index), _uv_col(day.uv_index)),
                 f"{day.rain_chance}%", f"{day.snow_chance}%", day.sunrise or "—", day.sunset or "—", moon or "—")
         console.print(Panel(ft, title="[bold]3-Day Forecast[/bold]",
+                            expand=False if harness else True,
                             border_style="yellow3", box=box.SIMPLE if harness else box.ROUNDED))
 
     if vision:
-        console.print(Panel(Text(vision, "white"), title="[bold]🛰  Image Analysis[/bold]", border_style="blue", box=box.ROUNDED))
+        console.print(Panel(Text(vision, "white"), title="[bold]🛰  Image Analysis[/bold]", 
+                            expand=False if harness else True,
+                            border_style="blue", box=box.ROUNDED))
 
     if answer:
         sections: dict[str, str] = {}
