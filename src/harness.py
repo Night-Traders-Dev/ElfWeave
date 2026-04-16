@@ -288,6 +288,8 @@ def tool_weather(location: str) -> str:
             "uv", "run",
             "--with", "browser-use",
             "--with", "ollama",
+            "--with", "rich",
+            "--with", "timezonefinder",
             "python", str(weather_path),
             f"weather in {location}",
             "--harness",
@@ -296,7 +298,9 @@ def tool_weather(location: str) -> str:
         text=True,
     )
     if out.returncode != 0 and not out.stdout.strip():
-        return f"[tool error] weather module failed: {out.stderr.strip()[:300]}"
+        # Capture more of the stderr for better tracebacks
+        err = out.stderr.strip()[:1000]
+        return f"[tool error] weather module failed: {err}"
     return out.stdout.strip()
 
 # ══════════════════════════════════════════════════════════════════════
