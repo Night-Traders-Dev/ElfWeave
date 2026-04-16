@@ -125,24 +125,27 @@ async def _chat_json(
     retries: int = 2,
 ) -> Tuple[dict, TokenUsage]:
     last = ""
-    u = TokenUsage()
+    current_user_msg = user
     for attempt in range(retries + 1):
-        resp = await client.chat(
-            model=model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user",   "content": user}],
-            options=get_ollama_options(),
-        )
-        u = _usage_from(resp)
-        ui.set_usage(phase, u); refresh()
-        raw = re.sub(r"```(?:json)?|```", "", _msg_content(resp).strip()).strip()
-        last = raw
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        # We use a internal streaming loop to update the UI
+        # even for JSON calls, so the user sees progress.
+        messages = [{"role": "system", "content": system},
+                    {"role": "user",   "content": current_user_msg}]
+        
+        # We use our existing _stream_chat logic to get the text and usage
+        raw_text, u = await _stream_chat(client, model, messages, ui, refresh, phase)
+        
+        last = raw_text
+        # Extract JSON block
+        clean = re.sub(r"```(?:json)?|```", "", raw_text.strip()).strip()
+        m = re.search(r"\{.*\}", clean, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group()), u
             except json.JSONDecodeError:
                 pass
+        
         if attempt < retries:
-            user += "\n\nReturn ONLY the JSON object. No prose."
-    raise ValueError(f"No valid JSON from {model}: {last!r}")
+            current_user_msg += "\n\nCRITICAL: Return ONLY the JSON object. No prose. The previous attempt was unparseable."
+            
+    raise ValueError(f"No valid JSON from {model} after {retries} retries. Final output: {last!r}")

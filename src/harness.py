@@ -148,12 +148,18 @@ class ToolDef:
     fn:          Callable
     signature:   str   # human-readable for planner prompt
 
-    async def call(self, args: dict) -> str:
+    async def call(self, args: dict, ui: UIState, refresh: Callable) -> str:
         try:
+            # We check if the function accepts ui/refresh
+            params = inspect.signature(self.fn).parameters
+            extra = {}
+            if "ui" in params: extra["ui"] = ui
+            if "refresh" in params: extra["refresh"] = refresh
+            
             if inspect.iscoroutinefunction(self.fn):
-                res = await self.fn(**args)
+                res = await self.fn(**args, **extra)
             else:
-                res = self.fn(**args)
+                res = self.fn(**args, **extra)
             return str(res)
         except TypeError as exc:
             return f"[tool error] bad args for {self.name!r}: {exc}"
@@ -289,25 +295,47 @@ async def tool_llm_summarize(text: str, max_sentences: int = 5) -> str:
     return (content or "").strip()
 
 
-async def _run_tool_subprocess(args: list[str]) -> str:
-    """Helper to run tool modules asynchronously."""
+async def _run_tool_subprocess(args: list[str], ui: UIState, refresh: Callable) -> str:
+    """Helper to run tool modules asynchronously and stream output to UI."""
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
-    stdout, stderr = await proc.communicate()
     
-    if proc.returncode != 0 and not stdout.decode().strip():
-        err = stderr.decode().strip()[:1000]
-        return f"[tool error] module failed: {err}"
-    return stdout.decode().strip()
+    # Read stdout line-by-line while process is running
+    stdout_chunks = []
+    
+    async def read_stream(stream, is_err=False):
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            text = line.decode().strip()
+            if text:
+                ui.push_chunk(text)
+                if not is_err:
+                    stdout_chunks.append(text)
+                refresh()
+
+    # We run both stdout and stderr reading in parallel
+    await asyncio.gather(
+        read_stream(proc.stdout, is_err=False),
+        read_stream(proc.stderr, is_err=True)
+    )
+    
+    await proc.wait()
+    
+    if proc.returncode != 0 and not stdout_chunks:
+        return f"[tool error] module failed with code {proc.returncode}"
+        
+    return "\n".join(stdout_chunks)
 
 
 
 
 @register_tool("weather", "Get current weather and forecast for a location.")
-async def tool_weather(location: str) -> str:
+async def tool_weather(location: str, ui: UIState, refresh: Callable) -> str:
     weather_path = Path(__file__).parent / "modules" / "weather.py"
     return await _run_tool_subprocess([
         "uv", "run",
@@ -318,11 +346,11 @@ async def tool_weather(location: str) -> str:
         "python", str(weather_path),
         f"weather in {location}",
         "--harness",
-    ])
+    ], ui, refresh)
 
 
 @register_tool("browser", "Execute a multi-step web task using an autonomous agent (e.g. 'Find current star-count of X on GitHub').")
-async def tool_browser(task: str) -> str:
+async def tool_browser(task: str, ui: UIState, refresh: Callable) -> str:
     agent_path = Path(__file__).parent / "modules" / "browser_agent.py"
     return await _run_tool_subprocess([
         "uv", "run",
@@ -333,11 +361,11 @@ async def tool_browser(task: str) -> str:
         "python", str(agent_path),
         task,
         "--harness",
-    ])
+    ], ui, refresh)
 
 
 @register_tool("knowledge_index", "Index a local directory (path) for semantic search.")
-async def tool_knowledge_index(path: str) -> str:
+async def tool_knowledge_index(path: str, ui: UIState, refresh: Callable) -> str:
     agent_path = Path(__file__).parent / "modules" / "knowledge_agent.py"
     return await _run_tool_subprocess([
         "uv", "run",
@@ -348,11 +376,11 @@ async def tool_knowledge_index(path: str) -> str:
         "python", str(agent_path),
         "--index", path,
         "--harness",
-    ])
+    ], ui, refresh)
 
 
 @register_tool("knowledge_query", "Search the local knowledge base for specific information / code context.")
-async def tool_knowledge_query(query: str) -> str:
+async def tool_knowledge_query(query: str, ui: UIState, refresh: Callable) -> str:
     agent_path = Path(__file__).parent / "modules" / "knowledge_agent.py"
     return await _run_tool_subprocess([
         "uv", "run",
@@ -363,11 +391,11 @@ async def tool_knowledge_query(query: str) -> str:
         "python", str(agent_path),
         "--query", query,
         "--harness",
-    ])
+    ], ui, refresh)
 
 
 @register_tool("analyze_failure", "Root-cause diagnosis — analyze why a plan failed and suggest a specific fix for the harness or tool code.")
-async def tool_analyze_failure(issues: str, plan_context: str) -> str:
+async def tool_analyze_failure(issues: str, plan_context: str, ui: UIState, refresh: Callable) -> str:
     # Use a high-intelligence model for self-diagnosis
     client = AsyncClient(host=OLLAMA_URL)
     # Target files for self-analysis
@@ -378,13 +406,17 @@ async def tool_analyze_failure(issues: str, plan_context: str) -> str:
     
     prompt = f"Validation Issues: {issues}\n\nPlan Context: {plan_context}\n\nCodebase Context: {code_context}\n\nIdentify the ROOT CAUSE and suggest a specific fix."
     
-    resp = await client.chat(
-        model=PLANNER_MODEL,
-        messages=[{"role": "system", "content": "You are a self-healing AI coordinator. Identify the root cause of failures."},
-                  {"role": "user", "content": prompt}]
+    # Using our new streaming _chat_json internally
+    res, _ = await _chat_json(
+        client,
+        PLANNER_MODEL,
+        "You are a self-healing AI coordinator. Identify the root cause of failures. Return JSON: { \"cause\": \"string\", \"fix\": \"string\" }",
+        prompt,
+        ui,
+        refresh,
+        "analyzer"
     )
-    msg = resp.get("message", {}) if isinstance(resp, dict) else resp.message
-    return (msg.get("content", "") if isinstance(msg, dict) else msg.content).strip()
+    return f"Cause: {res.get('cause')}\nFix Suggestion: {res.get('fix')}"
 
 # ══════════════════════════════════════════════════════════════════════
 #  Data models
@@ -542,7 +574,7 @@ async def execute_plan(
 
         resolved_args = _resolve_args(step.args, result_strings)
         t0 = time.monotonic()
-        out = await _TOOL_REGISTRY[step.tool].call(resolved_args)
+        out = await _TOOL_REGISTRY[step.tool].call(resolved_args, ui, refresh)
         elapsed = (time.monotonic() - t0) * 1000
 
         is_err = out.startswith("[error]") or out.startswith("[tool error]")

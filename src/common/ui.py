@@ -45,7 +45,8 @@ class Step:
         t = Text()
         t.append("  ")
         if self.state == "running":
-            t.append(SPINNER_FRAMES[sp_frame % len(SPINNER_FRAMES)], "bold cyan")
+            frame = int(time.monotonic() * 10) % len(SPINNER_FRAMES)
+            t.append(SPINNER_FRAMES[frame], "bold cyan")
         elif self.state == "done":
             t.append("✓", "bold green")
         elif self.state == "error":
@@ -112,8 +113,7 @@ class UIState:
 
     def render(self) -> RenderableType:
         with self._lock:
-            self._frame = (self._frame + 1) % len(SPINNER_FRAMES)
-            frame   = self._frame
+            frame   = int(time.monotonic() * 10) % len(SPINNER_FRAMES)
             steps   = list(self.steps)
             chunks  = list(self.stream_chunks)
             usage   = dict(self.usage)
