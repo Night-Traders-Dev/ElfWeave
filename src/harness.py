@@ -39,20 +39,19 @@ if _root not in sys.path:
 
 
 import argparse
+import asyncio
 import inspect
 import json
 import re
-import subprocess
-import threading
+import shlex
+import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Callable
-from urllib.request import Request, urlopen
+from typing import Any, Callable, Optional
 
-from ollama import Client, ResponseError
+from ollama import AsyncClient, ResponseError
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.panel import Panel
@@ -149,9 +148,13 @@ class ToolDef:
     fn:          Callable
     signature:   str   # human-readable for planner prompt
 
-    def call(self, args: dict) -> str:
+    async def call(self, args: dict) -> str:
         try:
-            return str(self.fn(**args))
+            if inspect.iscoroutinefunction(self.fn):
+                res = await self.fn(**args)
+            else:
+                res = self.fn(**args)
+            return str(res)
         except TypeError as exc:
             return f"[tool error] bad args for {self.name!r}: {exc}"
         except Exception as exc:
@@ -264,10 +267,10 @@ def tool_shell(cmd: str, timeout: int = 30) -> str:
     "llm_summarize",
     "Summarize a block of text using the planner model. Returns a concise summary.",
 )
-def tool_llm_summarize(text: str, max_sentences: int = 5) -> str:
+async def tool_llm_summarize(text: str, max_sentences: int = 5) -> str:
     # Lazy import so the tool works without a live client at import time.
-    client = Client(host=OLLAMA_URL)
-    resp = client.chat(
+    client = AsyncClient(host=OLLAMA_URL)
+    resp = await client.chat(
         model=PLANNER_MODEL,
         messages=[
             {
@@ -286,103 +289,87 @@ def tool_llm_summarize(text: str, max_sentences: int = 5) -> str:
     return (content or "").strip()
 
 
+async def _run_tool_subprocess(args: list[str]) -> str:
+    """Helper to run tool modules asynchronously."""
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    
+    if proc.returncode != 0 and not stdout.decode().strip():
+        err = stderr.decode().strip()[:1000]
+        return f"[tool error] module failed: {err}"
+    return stdout.decode().strip()
+
+
 
 
 @register_tool("weather", "Get current weather and forecast for a location.")
-def tool_weather(location: str) -> str:
+async def tool_weather(location: str) -> str:
     weather_path = Path(__file__).parent / "modules" / "weather.py"
-    out = subprocess.run(
-        [
-            "uv", "run",
-            "--with", "browser-use",
-            "--with", "ollama",
-            "--with", "rich",
-            "--with", "timezonefinder",
-            "python", str(weather_path),
-            f"weather in {location}",
-            "--harness",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if out.returncode != 0 and not out.stdout.strip():
-        # Capture more of the stderr for better tracebacks
-        err = out.stderr.strip()[:1000]
-        return f"[tool error] weather module failed: {err}"
-    return out.stdout.strip()
+    return await _run_tool_subprocess([
+        "uv", "run",
+        "--with", "browser-use",
+        "--with", "ollama",
+        "--with", "rich",
+        "--with", "timezonefinder",
+        "python", str(weather_path),
+        f"weather in {location}",
+        "--harness",
+    ])
 
 
 @register_tool("browser", "Execute a multi-step web task using an autonomous agent (e.g. 'Find current star-count of X on GitHub').")
-def tool_browser(task: str) -> str:
+async def tool_browser(task: str) -> str:
     agent_path = Path(__file__).parent / "modules" / "browser_agent.py"
-    out = subprocess.run(
-        [
-            "uv", "run",
-            "--with", "browser-use",
-            "--with", "langchain-ollama",
-            "--with", "ollama",
-            "--with", "rich",
-            "python", str(agent_path),
-            task,
-            "--harness",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if out.returncode != 0:
-        return f"[tool error] browser module failed: {out.stderr.strip()[:1000]}"
-    # Return everything after the Rich header/init lines if possible, or just the whole output
-    return out.stdout.strip()
+    return await _run_tool_subprocess([
+        "uv", "run",
+        "--with", "browser-use",
+        "--with", "langchain-ollama",
+        "--with", "ollama",
+        "--with", "rich",
+        "python", str(agent_path),
+        task,
+        "--harness",
+    ])
 
 
 @register_tool("knowledge_index", "Index a local directory (path) for semantic search.")
-def tool_knowledge_index(path: str) -> str:
+async def tool_knowledge_index(path: str) -> str:
     agent_path = Path(__file__).parent / "modules" / "knowledge_agent.py"
-    out = subprocess.run(
-        [
-            "uv", "run",
-            "--with", "faiss-cpu",
-            "--with", "sentence-transformers",
-            "--with", "numpy",
-            "--with", "rich",
-            "python", str(agent_path),
-            "--index", path,
-            "--harness",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if out.returncode != 0:
-        return f"[tool error] indexing failed: {out.stderr.strip()[:500]}"
-    return out.stdout.strip()
+    return await _run_tool_subprocess([
+        "uv", "run",
+        "--with", "faiss-cpu",
+        "--with", "sentence-transformers",
+        "--with", "numpy",
+        "--with", "rich",
+        "python", str(agent_path),
+        "--index", path,
+        "--harness",
+    ])
 
 
 @register_tool("knowledge_query", "Search the local knowledge base for specific information / code context.")
-def tool_knowledge_query(query: str) -> str:
+async def tool_knowledge_query(query: str) -> str:
     agent_path = Path(__file__).parent / "modules" / "knowledge_agent.py"
-    out = subprocess.run(
-        [
-            "uv", "run",
-            "--with", "faiss-cpu",
-            "--with", "sentence-transformers",
-            "--with", "numpy",
-            "--with", "rich",
-            "python", str(agent_path),
-            "--query", query,
-            "--harness",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if out.returncode != 0:
-        return f"[tool error] query failed: {out.stderr.strip()[:500]}"
-    return out.stdout.strip()
+    return await _run_tool_subprocess([
+        "uv", "run",
+        "--with", "faiss-cpu",
+        "--with", "sentence-transformers",
+        "--with", "numpy",
+        "--with", "rich",
+        "python", str(agent_path),
+        "--query", query,
+        "--harness",
+    ])
 
 
 @register_tool("analyze_failure", "Root-cause diagnosis — analyze why a plan failed and suggest a specific fix for the harness or tool code.")
-def tool_analyze_failure(issues: str, plan_context: str) -> str:
+async def tool_analyze_failure(issues: str, plan_context: str) -> str:
     # Use a high-intelligence model for self-diagnosis
-    client = Client(host=OLLAMA_URL)
+    client = AsyncClient(host=OLLAMA_URL)
     # Target files for self-analysis
     files = list(Path(_root).rglob("*.py"))
     code_context = ""
@@ -391,7 +378,7 @@ def tool_analyze_failure(issues: str, plan_context: str) -> str:
     
     prompt = f"Validation Issues: {issues}\n\nPlan Context: {plan_context}\n\nCodebase Context: {code_context}\n\nIdentify the ROOT CAUSE and suggest a specific fix."
     
-    resp = client.chat(
+    resp = await client.chat(
         model=PLANNER_MODEL,
         messages=[{"role": "system", "content": "You are a self-healing AI coordinator. Identify the root cause of failures."},
                   {"role": "user", "content": prompt}]
@@ -471,8 +458,8 @@ def get_relevant_history(query: str, limit: int = 3) -> str:
 #  Core pipeline functions
 # ══════════════════════════════════════════════════════════════════════
 
-def sanity_check(
-    client: Client,
+async def sanity_check(
+    client: AsyncClient,
     query: str,
     ui: UIState,
     refresh: Any,
@@ -482,14 +469,14 @@ def sanity_check(
         f"Query: {query}\n\n"
         f"Available tools:\n{catalogue}"
     )
-    result, _ = _chat_json(
+    result, _ = await _chat_json(
         client, CHECKER_MODEL, SANITY_SYSTEM, user_msg, ui, refresh, "sanity"
     )
     return result
 
 
-def make_plan(
-    client: Client,
+async def make_plan(
+    client: AsyncClient,
     query: str,
     relevant_tools: list[str],
     ui: UIState,
@@ -514,7 +501,7 @@ def make_plan(
     if feedback:
         user_msg += f"\n\nCRITICAL: Previous attempt failed with these issues:\n{feedback}\nDO NOT repeat the same mistakes. Adjust your strategy."
 
-    result, _ = _chat_json(
+    result, _ = await _chat_json(
         client, PLANNER_MODEL, PLANNER_SYSTEM, user_msg, ui, refresh, "plan"
     )
     steps_raw = result.get("steps", [])
@@ -531,7 +518,7 @@ def make_plan(
     return steps, rationale
 
 
-def execute_plan(
+async def execute_plan(
     plan: list[PlanStep],
     ui: UIState,
     refresh: Any,
@@ -555,7 +542,7 @@ def execute_plan(
 
         resolved_args = _resolve_args(step.args, result_strings)
         t0 = time.monotonic()
-        out = _TOOL_REGISTRY[step.tool].call(resolved_args)
+        out = await _TOOL_REGISTRY[step.tool].call(resolved_args)
         elapsed = (time.monotonic() - t0) * 1000
 
         is_err = out.startswith("[error]") or out.startswith("[tool error]")
@@ -577,8 +564,8 @@ def execute_plan(
     return results
 
 
-def validate_result(
-    client: Client,
+async def validate_result(
+    client: AsyncClient,
     query: str,
     results: list[StepResult],
     ui: UIState,
@@ -593,7 +580,7 @@ def validate_result(
         f"Original query: {query}\n\n"
         f"Pipeline output:\n{aggregate[:4_000]}"
     )
-    result, _ = _chat_json(
+    result, _ = await _chat_json(
         client, REVIEW_MODEL, VALIDATOR_SYSTEM, user_msg, ui, refresh, "validate"
     )
     return result
@@ -692,7 +679,7 @@ def print_result_card(
 #  Main orchestration
 # ══════════════════════════════════════════════════════════════════════
 
-def run(query: str, dry_run: bool = False) -> int:
+async def run(query: str, dry_run: bool = False) -> int:
     console = Console()
     ui      = UIState(agent_name="agent-harness", model_info=f"{CHECKER_MODEL} · {PLANNER_MODEL} · {REVIEW_MODEL}")
 
@@ -714,16 +701,19 @@ def run(query: str, dry_run: bool = False) -> int:
         try:
             # ── 1. connect + warmup ───────────────────────────────────
             s_init = ui.add_step("connect + warmup").start(); refresh()
-            client = setup_ollama(OLLAMA_URL, [CHECKER_MODEL, PLANNER_MODEL, REVIEW_MODEL])
-            with ThreadPoolExecutor(max_workers=3) as wp:
-                wp.submit(_warmup, client, CHECKER_MODEL)
-                wp.submit(_warmup, client, PLANNER_MODEL)
-                wp.submit(_warmup, client, REVIEW_MODEL)
+            client = await setup_ollama(OLLAMA_URL, [CHECKER_MODEL, PLANNER_MODEL, REVIEW_MODEL])
+            
+            # Parallel warmup using asyncio.gather
+            await asyncio.gather(
+                _warmup(client, CHECKER_MODEL),
+                _warmup(client, PLANNER_MODEL),
+                _warmup(client, REVIEW_MODEL)
+            )
             s_init.done("Ollama ready · models warmed"); refresh()
 
             # ── 2. sanity check ───────────────────────────────────────
             s_chk = ui.add_step("sanity check").start(); refresh()
-            check_raw = sanity_check(client, query, ui, refresh)
+            check_raw = await sanity_check(client, query, ui, refresh)
 
             can_handle = bool(check_raw.get("can_handle", False))
             confidence = float(check_raw.get("confidence", 0.0))
@@ -750,7 +740,7 @@ def run(query: str, dry_run: bool = False) -> int:
             while retry_count <= max_retries and not aligned:
                 # ── 3. plan ───────────────────────────────────────────
                 s_plan = ui.add_step(f"plan (attempt {retry_count})").start(); refresh()
-                plan, rationale = make_plan(client, query, rel_tools, ui, refresh, feedback=last_feedback)
+                plan, rationale = await make_plan(client, query, rel_tools, ui, refresh, feedback=last_feedback)
                 s_plan.done(
                     f"{len(plan)} step{'s' if len(plan) != 1 else ''}  ·  "
                     + rationale[:40]
@@ -770,11 +760,11 @@ def run(query: str, dry_run: bool = False) -> int:
                     return 0
 
                 # ── 4. execute ────────────────────────────────────────────
-                results = execute_plan(plan, ui, refresh)
+                results = await execute_plan(plan, ui, refresh)
 
                 # ── 5. validate ───────────────────────────────────────────
                 s_val = ui.add_step(f"validate (attempt {retry_count})").start(); refresh()
-                validation = validate_result(client, query, results, ui, refresh)
+                validation = await validate_result(client, query, results, ui, refresh)
                 aligned    = bool(validation.get("aligned", True))
                 score      = float(validation.get("quality_score", 1.0))
                 notes      = str(validation.get("notes", ""))
@@ -885,7 +875,10 @@ def main() -> int:
         print("Empty query.")
         return 1
 
-    return run(query, dry_run=args.dry_run)
+    try:
+        return asyncio.run(run(query, dry_run=args.dry_run))
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

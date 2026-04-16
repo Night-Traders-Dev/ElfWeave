@@ -52,7 +52,7 @@ async def run(query: str, model: str, harness: bool = False) -> int:
     try:
         s_init = ui.add_step("connect + warmup").start(); refresh()
         # Ensure we have the model (and pull it if needed)
-        _ = setup_ollama(OLLAMA_URL, [model])
+        _ = await setup_ollama(OLLAMA_URL, [model])
         s_init.done("Ollama ready · model verified"); refresh()
         
         # ── Load Domain Knowledge ──

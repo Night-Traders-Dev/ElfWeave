@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 import argparse
+import asyncio
 from pathlib import Path
 from typing import Optional, List
 
@@ -27,17 +28,19 @@ from .knowledge_logic import get_logic
 #  Main pipeline
 # ══════════════════════════════════════════════════════════════════════
 
-def run_index(path: str, ui: UIState, refresh: callable) -> int:
+async def run_index(path: str, ui: UIState, refresh: callable) -> int:
     s_idx = ui.add_step(f"indexing {path}").start(); refresh()
     logic = get_logic()
-    count = logic.index_files(Path(path).expanduser())
+    # Run heavy indexing in a thread to keep UI loop spinning
+    count = await asyncio.to_thread(logic.index_files, Path(path).expanduser())
     s_idx.done(f"indexed {count} chunks"); refresh()
     return 0
 
-def run_query(query: str, ui: UIState, refresh: callable, harness: bool = False) -> str:
+async def run_query(query: str, ui: UIState, refresh: callable, harness: bool = False) -> str:
     s_q = ui.add_step("querying KB").start(); refresh()
     logic = get_logic()
-    results = logic.query(query)
+    # Run heavy query in a thread
+    results = await asyncio.to_thread(logic.query, query)
     
     if not results:
         s_q.error("no results found"); refresh()
@@ -52,7 +55,7 @@ def run_query(query: str, ui: UIState, refresh: callable, harness: bool = False)
     
     return "\n\n".join(context)
 
-def main() -> None:
+async def main() -> None:
     parser = argparse.ArgumentParser(description="Local Knowledge Base Agent")
     parser.add_argument("--index", metavar="PATH", help="Index a directory")
     parser.add_argument("--query", metavar="TEXT", help="Query the knowledge base")
@@ -64,6 +67,7 @@ def main() -> None:
     
     if args.harness:
         def refresh() -> None: pass
+        live = None
     else:
         live = Live(ui.render(), refresh_per_second=10, console=console, screen=False)
         live.start()
@@ -72,12 +76,12 @@ def main() -> None:
 
     try:
         if args.index:
-            run_index(args.index, ui, refresh)
+            await run_index(args.index, ui, refresh)
             if not args.harness:
                 print("\n[bold green]Indexing complete.[/bold green]")
         
         if args.query:
-            result = run_query(args.query, ui, refresh, harness=args.harness)
+            result = await run_query(args.query, ui, refresh, harness=args.harness)
             if not args.harness:
                 console.print(Panel(result, title="Search Results"))
             else:
@@ -85,11 +89,13 @@ def main() -> None:
                 print(result)
                 
         ui.running = False; refresh()
-        if not args.harness and 'live' in locals():
+        if not args.harness and live:
             live.stop()
     except Exception as e:
         ui.add_step("fatal error").error(str(e)); refresh()
+        if not args.harness and live:
+            live.stop()
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

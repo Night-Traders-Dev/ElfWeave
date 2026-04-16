@@ -2,52 +2,53 @@ import json
 import re
 import subprocess
 import time
+import asyncio
 from typing import Any, Tuple, List, Dict, Callable, Optional
 
-from ollama import Client, ResponseError
+from ollama import AsyncClient, ResponseError
 from .types import TokenUsage
 from .config import OLLAMA_URL, get_ollama_options
 
-def _wait_ollama(client: Client, timeout: int = 30) -> None:
+async def _wait_ollama(client: AsyncClient, timeout: int = 30) -> None:
     t0 = time.time()
     while time.time() - t0 < timeout:
         try:
-            client.list()
+            await client.list()
             return
         except Exception:
-            time.sleep(1)
+            await asyncio.sleep(1)
     raise RuntimeError(f"Ollama not reachable after {timeout}s")
 
-def _ensure_model(client: Client, model: str) -> None:
+async def _ensure_model(client: AsyncClient, model: str) -> None:
     try:
-        client.show(model)
+        await client.show(model)
     except ResponseError as exc:
         if getattr(exc, "status_code", None) == 404 or "not found" in str(exc).lower():
-            # Note: client.pull(model) is blocking and doesn't provide easy streaming progress here
-            # without more complex wrapping. For now, we keep it simple.
-            client.pull(model)
+            # Note: client.pull(model) is an async generator but we can just await the full pull
+            # if we don't need a progress bar for the pull itself.
+            await client.pull(model)
         else:
             raise
 
-def _warmup(client: Client, model: str) -> None:
+async def _warmup(client: AsyncClient, model: str) -> None:
     """Send a trivial request so the model is resident in VRAM before the real call."""
     try:
-        client.chat(model=model,
-                    messages=[{"role": "user", "content": "hi"}],
-                    options=get_ollama_options(ctx_override=1024)) # Light warmup
+        await client.chat(model=model,
+                          messages=[{"role": "user", "content": "hi"}],
+                          options=get_ollama_options(ctx_override=1024)) # Light warmup
     except Exception:
         pass
 
-def setup_ollama(url: str, models: List[str]) -> Client:
-    client = Client(host=url)
+async def setup_ollama(url: str, models: List[str]) -> AsyncClient:
+    client = AsyncClient(host=url)
     try:
-        client.list()
+        await client.list()
     except Exception:
         subprocess.Popen(["ollama", "serve"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _wait_ollama(client)
+        await _wait_ollama(client)
     for m in models:
-        _ensure_model(client, m)
+        await _ensure_model(client, m)
     return client
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -69,8 +70,8 @@ def _usage_from(resp: Any) -> TokenUsage:
 def _est_tokens(text: str) -> int:
     return max(1, len(text.strip()) // 4)
 
-def _stream_chat(
-    client: Client,
+async def _stream_chat(
+    client: AsyncClient,
     model: str,
     messages: List[Dict[str, Any]],
     ui: Any, # UIState
@@ -95,7 +96,7 @@ def _stream_chat(
     opts = get_ollama_options()
     opts["temperature"] = temperature
 
-    for chunk in client.chat(model=model, messages=messages, stream=True, options=opts):
+    async for chunk in await client.chat(model=model, messages=messages, stream=True, options=opts):
         piece = _msg_content(chunk)
         if piece:
             parts.append(piece)
@@ -113,8 +114,8 @@ def _stream_chat(
     refresh()
     return "".join(parts).strip(), final_u
 
-def _chat_json(
-    client: Client,
+async def _chat_json(
+    client: AsyncClient,
     model: str,
     system: str,
     user: str,
@@ -126,7 +127,7 @@ def _chat_json(
     last = ""
     u = TokenUsage()
     for attempt in range(retries + 1):
-        resp = client.chat(
+        resp = await client.chat(
             model=model,
             messages=[{"role": "system", "content": system},
                       {"role": "user",   "content": user}],

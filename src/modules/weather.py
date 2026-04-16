@@ -16,9 +16,9 @@ if _root not in sys.path:
 
 
 import argparse
+import asyncio
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from textwrap import dedent
 from typing import Optional
@@ -293,7 +293,7 @@ def print_weather_card(
 #  Main pipeline
 # ══════════════════════════════════════════════════════════════════════
 
-def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> int:
+async def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> int:
     console = Console()
     ui      = UIState(agent_name="weather-agent", model_info=f"{AGENT_MODEL} · {CHECKER_MODEL}")
 
@@ -315,15 +315,19 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
 
     try:
         s_init = ui.add_step("connect + warmup").start(); refresh()
-        client = setup_ollama(OLLAMA_URL, [AGENT_MODEL, CHECKER_MODEL])
-        # Auto-warmup
-        _warmup(client, AGENT_MODEL)
-        _warmup(client, CHECKER_MODEL)
+        client = await setup_ollama(OLLAMA_URL, [AGENT_MODEL, CHECKER_MODEL])
+        
+        # Parallel warmup using asyncio.gather
+        await asyncio.gather(
+            _warmup(client, AGENT_MODEL),
+            _warmup(client, CHECKER_MODEL)
+        )
         
         # ── Load Domain Knowledge ──
         try:
             from src.modules.knowledge_logic import get_logic
             logic = get_logic()
+            # logic.load is sync but fast, could be to_thread if slow
             if logic.load():
                 results = logic.query("weather protocol visual assessment coordinates")
                 expert_manual = "\n".join(r.get("text", "") for r in results)
@@ -336,13 +340,12 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
         s_cls  = ui.add_step("classify query").start(); refresh()
         s_geo  = ui.add_step("geocode").start();        refresh()
 
-        with ThreadPoolExecutor(max_workers=2) as p:
-            f_cls  = p.submit(_chat_json, client, CHECKER_MODEL, CLASSIFIER_SYSTEM, f"Classify: {query!r}", ui, refresh, "classify")
-            f_geo  = p.submit(geocode, loc_hint)
-            while not (f_cls.done() and f_geo.done()):
-                refresh(); time.sleep(0.08)
-            pc_raw, pc_usage = f_cls.result()
-            coords = f_geo.result()
+        # Execute classification (async) and geocoding (threaded sync) in parallel
+        f_cls_task = _chat_json(client, CHECKER_MODEL, CLASSIFIER_SYSTEM, f"Classify: {query!r}", ui, refresh, "classify")
+        f_geo_task = asyncio.to_thread(geocode, loc_hint)
+        
+        pc_raw, pc_usage = await f_cls_task
+        coords = await f_geo_task
 
         is_weather = bool(pc_raw.get("is_weather_query", False))
         location   = str(pc_raw.get("location", "")).strip() or loc_hint
@@ -357,13 +360,11 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
         s_wx  = ui.add_step("fetch weather").start();  refresh()
         s_mem = ui.add_step("load memory").start();    refresh()
 
-        with ThreadPoolExecutor(max_workers=2) as p2:
-            f_wx  = p2.submit(fetch_weather, location, coords)
-            f_mem = p2.submit(load_memory)
-            while not (f_wx.done() and f_mem.done()):
-                refresh(); time.sleep(0.08)
-            report    = f_wx.result()
-            snapshots = f_mem.result()
+        f_wx_task = asyncio.to_thread(fetch_weather, location, coords)
+        f_mem_task = asyncio.to_thread(load_memory)
+        
+        report = await f_wx_task
+        snapshots = await f_mem_task
 
         s_wx.done(f"{report.desc} · {report.temp_f}°F")
         prev_snap = find_prev_snapshot(report, snapshots)
@@ -374,7 +375,7 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
             img = Path(image_path).expanduser()
             if img.exists():
                 s_vis = ui.add_step("vision analysis").start(); refresh()
-                vision_note, _ = _stream_chat(client, AGENT_MODEL, [{"role": "user", "content": f"Analyse context: {report.desc}", "images": [str(img)]}], ui, refresh, phase="vision")
+                vision_note, _ = await _stream_chat(client, AGENT_MODEL, [{"role": "user", "content": f"Analyse context: {report.desc}", "images": [str(img)]}], ui, refresh, phase="vision")
                 s_vis.done(vision_note[:60]); refresh()
 
         s_ans = ui.add_step("generate answer").start(); refresh()
@@ -383,14 +384,14 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
         if expert_manual:
             sys_prompt = f"EXPERT MANUAL:\n{expert_manual}\n\n{AGENT_SYSTEM}"
 
-        answer, _ = _stream_chat(client, AGENT_MODEL, 
+        answer, _ = await _stream_chat(client, AGENT_MODEL, 
                                  [{"role": "system", "content": sys_prompt},
                                   {"role": "user", "content": f"Query: {query}\n\n{ctx}"}],
                                  ui, refresh, phase="answer")
         s_ans.done(answer[:60]); refresh()
 
         s_val = ui.add_step("validate result").start(); refresh()
-        res, _ = _chat_json(client, CHECKER_MODEL, RESULT_CHECK_SYSTEM, f"Query: {query}\nAnswer: {answer}", ui, refresh, "validate")
+        res, _ = await _chat_json(client, CHECKER_MODEL, RESULT_CHECK_SYSTEM, f"Query: {query}\nAnswer: {answer}", ui, refresh, "validate")
         s_val.done(f"valid={res.get('is_valid', True)} score={res.get('quality_score', 1):.0%}"); refresh()
 
         s_save = ui.add_step("save memory").start(); refresh()
@@ -407,14 +408,15 @@ def run(query: str, image_path: Optional[str] = None, harness: bool = False) -> 
         print_weather_card(console, report, comp, prev_snap, answer, vision_note, harness=harness)
     return 0
 
-def main() -> None:
+async def main() -> None:
     parser = argparse.ArgumentParser(description="Multimodal weather agent")
     parser.add_argument("query", nargs="*", help="Weather question")
     parser.add_argument("--image", metavar="PATH", help="Image for vision analysis")
     parser.add_argument("--harness", action="store_true", help="Harness mode")
     args = parser.parse_args()
     query = " ".join(args.query) if args.query else input("Weather query: ")
-    sys.exit(run(query, args.image, harness=args.harness))
+    res = await run(query, args.image, harness=args.harness)
+    sys.exit(res)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
