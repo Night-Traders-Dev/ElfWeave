@@ -4,21 +4,21 @@ ElfWeave is a high-performance, modular multi-agent platform designed for local 
 
 ## 🚀 Key Features
 
+- **Standardized "Claude Code" UI**: A premium, terminal-native dashboard with **synchronized 10Hz animation frames** and unified result cards across all agents.
 - **Asynchronous Orchestration**: Fully `asyncio`-powered TUI with live token streaming and non-blocking sub-agent logs.
+- **Specialist-First Routing**: Intelligent tool selection that prioritizes high-level agents (Weather, Browser, Knowledge) over raw utilities to prevent hallucinations.
 - **Self-Improvement Loop**: Autonomous retry mechanism with LLM-based failure analysis and episodic memory.
-- **Hardware-Aware Tuning**: Tiered model approach (**Planner** for reasoning vs. **Reviewer** for validation) with dynamic context window management.
-- **Domain Knowledge Injection**: Agents "train" themselves on-the-fly by querying specialized markdown manuals before execution.
-- **Rich TUI**: A beautiful, terminal-native dashboard featuring fluid animations and real-time status tracking.
+- **Hardware-Aware Tuning**: Tiered model approach (**qwen2.5:7b** for reasoning vs. **llama3.2:3b** for validation) with dynamic context window management.
 
 ## 🛠 Project Structure
 
 ```text
 src/
-├── harness.py          # Central Orchestrator & Planner
+├── harness.py          # Central Orchestrator & Planner (qwen2.5:7b)
 ├── common/
 │   ├── config.py       # Hardware & VRAM optimizations
 │   ├── ollama.py       # Async LLM helpers & streaming
-│   └── ui.py           # Rich TUI state management
+│   └── ui.py           # Synchronized TUI lifecycle manager
 └── modules/
     ├── browser_agent    # Autonomous web navigation
     ├── weather          # Multimodal weather analysis
@@ -26,41 +26,27 @@ src/
     └── monitor_agent    # Real-time log/anomaly watcher
 ```
 
-## 🚥 Getting Started
+## 🧠 Specialist Priority Architecture
 
-### Prerequisites
-- [Ollama](https://ollama.ai/) installed and running.
-- [uv](https://github.com/astral-sh/uv) for fast, isolated python execution.
-
-### Installation
-Clone the repository and run the harness. `uv` will automatically handle dependencies:
-
-```bash
-uv run --with browser-use --with ollama python src/harness.py "Get the weather for Ashland, KY"
-```
-
-## 🧠 Tiered Model Architecture
-
-To thrive on an **8GB RTX 5060**, ElfWeave splits duties between models:
-- **Planner (qwen2.5:7b)**: Handles complex reasoning, tool selection, and task execution.
-- **Reviewer (llama3.2:3b)**: Validates outputs, checks sanity, and audits grounding.
-- **Monitor (llama3.2:1b)**: Optimized for high-frequency log analysis and anomaly detection.
+To minimize hallucination (e.g., LLMs inventing URLs for `http_get`), ElfWeave enforces a **Specialist Priority** protocol:
+1. **Domain Specialists**: High-level modules like `weather` or `browser` are authoritative for their domains.
+2. **General Utilities**: Tools like `http_get` or `shell` are only used when no specialist exists or when a specific URL/command is grounded in previous output.
 
 ## 📈 Self-Improvement & Memory
 
 ElfWeave doesn't just fail; it learns.
-1. **Validation Audit**: The Reviewer model scores every output. If it falls below 70%, a retry is triggered.
+1. **Validation Audit**: The Reviewer model (`llama3.2:3b`) scores every output. If it falls below 70%, a retry is triggered.
 2. **Failure Analysis**: The `analyze_failure` tool examines the orchestrator code and logs to suggest a specific fix for the next retry.
 3. **Episodic Memory**: Past execution results are stored in `.harness_history.json` and injected into the Planner's context to avoid repeating past mistakes.
 
 ## 🤖 Agent Roster
 
-| Agent | Task | Tech Stack |
+| Agent | Domain | Technology |
 | :--- | :--- | :--- |
-| **Browser** | Autonomous web research | `browser-use`, `Playwright` |
-| **Weather** | Real-time multimodal weather | `wttr.in`, `vision-llm` |
-| **Knowledge** | Local codebase RAG | `FAISS`, `SentenceTransformers` |
-| **Monitor** | Real-time anomaly detection | `async generators`, `LogTailer` |
+| **Browser** | Web Research | `browser-use`, `Playwright` |
+| **Weather** | Meteorology | `wttr.in`, `vision-llm` |
+| **Knowledge** | Local RAG | `FAISS`, `MiniLM` |
+| **Monitor** | Anomaly Detection | `asyncio`, `Ollama` |
 
 ---
 *Created by the Night-Traders-Dev team.*

@@ -88,6 +88,11 @@ SANITY_SYSTEM = dedent("""\
     Given a user query and the list of available tools, decide whether
     the query can be fully or partially handled.
 
+    Protocol Priority: 
+    - If a query is about weather, MUST include 'weather' in relevant_tools.
+    - If a query is about site navigation or deep research, MUST include 'browser'.
+    - If a query is about local code or files, MUST include 'knowledge_query'.
+
     Respond with ONLY a JSON object — no markdown, no prose.
     {
       "can_handle": bool,
@@ -103,11 +108,13 @@ PLANNER_SYSTEM = dedent("""\
 
     Rules:
       1. Use only tools listed in the catalogue.
-      2. Prefer the fewest steps that fully address the query.
-      3. To pass a prior step's output as an arg value, use the string "{step_N}"
+      2. Specialist Priority: ALWAYS prefer specialized agents (weather, browser, knowledge_query) 
+         over raw utilities (http_get, shell) for their respective domains.
+      3. Minimal Hallucination: Do NOT invent URLs or paths for http_get/shell unless they are provided in the query or by a previous step.
+      4. To pass a prior step's output as an arg value, use the string "{step_N}"
          where N is the 0-based index of the prior step (e.g. "{step_0}").
-      4. Every step must have a clear, human-readable "description".
-      5. Respond with ONLY a JSON object — no markdown, no prose.
+      5. Every step must have a clear, human-readable "description".
+      6. Respond with ONLY a JSON object — no markdown, no prose.
 
     {
       "rationale": "why this plan works",
@@ -248,7 +255,7 @@ async def tool_write_file(path: str, content: str) -> str:
     return str(p.resolve())
 
 
-@register_tool("http_get", "Fetch a URL via HTTP GET and return the response body (plain text).")
+@register_tool("http_get", "Fetch a URL via HTTP GET and return the response body (plain text). DO NOT USE this for weather, search, or browsing if a specialist tool (weather, browser, knowledge) is available.")
 async def tool_http_get(url: str, timeout: int = 15) -> str:
     from urllib.request import Request, urlopen
     def _sync_get():
@@ -351,7 +358,7 @@ async def _run_tool_subprocess(args: list[str], ui: UIState, refresh: Callable) 
 
 
 
-@register_tool("weather", "Get current weather and forecast for a location.")
+@register_tool("weather", "PRIMARY TOOL for all weather queries, forecasts, and climate data. Use this instead of http_get for any weather-related task.")
 async def tool_weather(location: str, ui: UIState, refresh: Callable) -> str:
     weather_path = Path(__file__).parent / "modules" / "weather.py"
     return await _run_tool_subprocess([
@@ -366,7 +373,7 @@ async def tool_weather(location: str, ui: UIState, refresh: Callable) -> str:
     ], ui, refresh)
 
 
-@register_tool("browser", "Execute a multi-step web task using an autonomous agent (e.g. 'Find current star-count of X on GitHub').")
+@register_tool("browser", "PRIMARY TOOL for multi-step web tasks, site navigation, and deep research using an autonomous agent (e.g. 'Find star-count of X on GitHub').")
 async def tool_browser(task: str, ui: UIState, refresh: Callable) -> str:
     agent_path = Path(__file__).parent / "modules" / "browser_agent.py"
     return await _run_tool_subprocess([
@@ -570,6 +577,7 @@ async def execute_plan(
     plan: list[PlanStep],
     ui: UIState,
     refresh: Any,
+    client: AsyncClient,
 ) -> list[StepResult]:
     results: list[StepResult] = []
     result_strings: list[str] = []
@@ -762,7 +770,7 @@ async def run(query: str, dry_run: bool = False) -> int:
                     return 0
 
                 # ── 4. execute ────────────────────────────────────────────
-                results = await execute_plan(plan, ui, refresh)
+                results = await execute_plan(plan, ui, refresh, client)
 
                 # ── 5. validate ───────────────────────────────────────────
                 s_val = ui.add_step(f"validate (attempt {retry_count})").start(); refresh()
