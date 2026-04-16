@@ -303,6 +303,73 @@ def tool_weather(location: str) -> str:
         return f"[tool error] weather module failed: {err}"
     return out.stdout.strip()
 
+
+@register_tool("browser", "Execute a multi-step web task using an autonomous agent (e.g. 'Find current star-count of X on GitHub').")
+def tool_browser(task: str) -> str:
+    agent_path = Path(__file__).parent / "modules" / "browser_agent.py"
+    out = subprocess.run(
+        [
+            "uv", "run",
+            "--with", "browser-use",
+            "--with", "langchain-ollama",
+            "--with", "ollama",
+            "--with", "rich",
+            "python", str(agent_path),
+            task,
+            "--harness",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        return f"[tool error] browser module failed: {out.stderr.strip()[:1000]}"
+    # Return everything after the Rich header/init lines if possible, or just the whole output
+    return out.stdout.strip()
+
+
+@register_tool("knowledge_index", "Index a local directory (path) for semantic search.")
+def tool_knowledge_index(path: str) -> str:
+    agent_path = Path(__file__).parent / "modules" / "knowledge_agent.py"
+    out = subprocess.run(
+        [
+            "uv", "run",
+            "--with", "faiss-cpu",
+            "--with", "sentence-transformers",
+            "--with", "numpy",
+            "--with", "rich",
+            "python", str(agent_path),
+            "--index", path,
+            "--harness",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        return f"[tool error] indexing failed: {out.stderr.strip()[:500]}"
+    return out.stdout.strip()
+
+
+@register_tool("knowledge_query", "Search the local knowledge base for specific information / code context.")
+def tool_knowledge_query(query: str) -> str:
+    agent_path = Path(__file__).parent / "modules" / "knowledge_agent.py"
+    out = subprocess.run(
+        [
+            "uv", "run",
+            "--with", "faiss-cpu",
+            "--with", "sentence-transformers",
+            "--with", "numpy",
+            "--with", "rich",
+            "python", str(agent_path),
+            "--query", query,
+            "--harness",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        return f"[tool error] query failed: {out.stderr.strip()[:500]}"
+    return out.stdout.strip()
+
 # ══════════════════════════════════════════════════════════════════════
 #  Data models
 # ══════════════════════════════════════════════════════════════════════
