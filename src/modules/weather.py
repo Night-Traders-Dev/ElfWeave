@@ -55,8 +55,8 @@ from src.modules.weather_ui import (
 # ══════════════════════════════════════════════════════════════════════
 
 OLLAMA_URL      = "http://localhost:11434"
-AGENT_MODEL     = "llava:7b-v1.6-mistral-q4_0"
-CHECKER_MODEL   = "llama3.2:3b"
+AGENT_MODEL     = "llama3.1:8b"
+CHECKER_MODEL   = "llama3.1:8b"
 UI_REFRESH_HZ   = 10
 
 # ══════════════════════════════════════════════════════════════════════

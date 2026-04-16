@@ -16,9 +16,9 @@ OLLAMA_NUM_THREAD   = multiprocessing.cpu_count() // 2
 
 # Model Selection (Tiered for 8GB VRAM)
 PLANNER_MODEL       = "qwen2.5:7b"      # Stronger at tool-use/reasoning
-CHECKER_MODEL       = "llama3.2:3b"     # Faster for sanity checks
-REVIEW_MODEL        = "llama3.2:3b"     # Efficient for validation
-AGENT_MODEL         = "llama3.2:3b"     # Default persona model
+CHECKER_MODEL       = "llama3.1:8b"     # Reliable for sanity checks
+REVIEW_MODEL        = "llama3.1:8b"     # Standard validation model
+AGENT_MODEL         = "llama3.1:8b"     # Default persona model
 
 # Memory & Knowledge
 KNOWLEDGE_DIR       = Path.home() / ".elfweave_knowledge"

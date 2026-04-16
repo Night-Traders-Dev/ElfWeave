@@ -327,22 +327,23 @@ async def _run_tool_subprocess(args: list[str], ui: UIState, refresh: Callable) 
         stderr=asyncio.subprocess.PIPE
     )
     
-    # Read stdout line-by-line while process is running
     stdout_chunks = []
+    stderr_chunks = []
     
     async def read_stream(stream, is_err=False):
         while True:
             line = await stream.readline()
             if not line:
                 break
-            text = line.decode().strip()
+            text = line.decode(errors="replace").strip()
             if text:
                 ui.push_chunk(text)
-                if not is_err:
+                if is_err:
+                    stderr_chunks.append(text)
+                else:
                     stdout_chunks.append(text)
                 refresh()
 
-    # We run both stdout and stderr reading in parallel
     await asyncio.gather(
         read_stream(proc.stdout, is_err=False),
         read_stream(proc.stderr, is_err=True)
@@ -350,7 +351,10 @@ async def _run_tool_subprocess(args: list[str], ui: UIState, refresh: Callable) 
     
     await proc.wait()
     
-    if proc.returncode != 0 and not stdout_chunks:
+    if proc.returncode != 0:
+        err_msg = "\n".join(stderr_chunks)
+        if err_msg:
+            return f"[tool error] {err_msg}"
         return f"[tool error] module failed with code {proc.returncode}"
         
     return "\n".join(stdout_chunks)

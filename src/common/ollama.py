@@ -138,14 +138,21 @@ async def _chat_json(
         last = raw_text
         # Extract JSON block
         clean = re.sub(r"```(?:json)?|```", "", raw_text.strip()).strip()
-        m = re.search(r"\{.*\}", clean, re.DOTALL)
+        m = re.search(r"(\{.*\})", clean, re.DOTALL)
         if m:
             try:
-                return json.loads(m.group()), u
+                return json.loads(m.group(1)), u
             except json.JSONDecodeError:
                 pass
         
+        # Fallback: handles truncated JSON (missing closing brace)
+        if clean.startswith("{") and not clean.endswith("}"):
+            try:
+                return json.loads(clean + "}"), u
+            except json.JSONDecodeError:
+                pass
+
         if attempt < retries:
-            current_user_msg += "\n\nCRITICAL: Return ONLY the JSON object. No prose. The previous attempt was unparseable."
+            current_user_msg += "\n\nCRITICAL: Return ONLY the JSON object. No prose. The previous attempt was unparseable or truncated."
             
     raise ValueError(f"No valid JSON from {model} after {retries} retries. Final output: {last!r}")
