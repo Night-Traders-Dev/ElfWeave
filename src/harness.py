@@ -494,7 +494,7 @@ async def tool_code_architect(files: list[str], ui: UIState, refresh: Callable) 
 
 
 @register_tool("fs_manager", "Project explorer — generate repository trees, scan for file patterns, and analyze directory-scale metadata.")
-async def tool_fs_manager(path: str = ".", ui: UIState, refresh: Callable) -> str:
+async def tool_fs_manager(ui: UIState, refresh: Callable, path: str = ".") -> str:
     agent_path = Path(__file__).parent / "modules" / "fs_manager.py"
     args = ["uv", "run", "--with", "rich", "python", str(agent_path), path, "--harness"]
     return await _run_tool_subprocess(args, ui, refresh)
