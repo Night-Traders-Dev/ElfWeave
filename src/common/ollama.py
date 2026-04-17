@@ -227,13 +227,13 @@ class MegaKernelRuntime:
                 f"got {model}"
             )
         max_tokens = int(options.get("num_predict") or options.get("max_tokens") or self.max_tokens)
-        async with self._lock:
-            started = time.perf_counter()
-            text, prompt_tokens = await asyncio.to_thread(self._generate_sync, messages, max_tokens)
-            duration_ms = (time.perf_counter() - started) * 1000
-
-        completion_tokens = _est_tokens(text)
         if not stream:
+            async with self._lock:
+                started = time.perf_counter()
+                text, prompt_tokens = await asyncio.to_thread(self._generate_sync, messages, max_tokens)
+                duration_ms = (time.perf_counter() - started) * 1000
+
+            completion_tokens = _est_tokens(text)
             return {
                 "message": {"content": text},
                 "prompt_eval_count": prompt_tokens,
@@ -241,19 +241,51 @@ class MegaKernelRuntime:
                 "total_duration": int(duration_ms * 1_000_000),
             }
 
+        async def _run_generate() -> Tuple[str, int, float]:
+            async with self._lock:
+                started = time.perf_counter()
+                text, prompt_tokens = await asyncio.to_thread(self._generate_sync, messages, max_tokens)
+                duration_ms = (time.perf_counter() - started) * 1000
+            return text, prompt_tokens, duration_ms
+
+        est_prompt_tokens = sum(_est_tokens(str(m.get("content", ""))) for m in messages)
+        task = asyncio.create_task(_run_generate())
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
         async def _gen():
-            chunks = _split_stream_text(text)
-            for idx, piece in enumerate(chunks):
-                payload = {"message": {"content": piece}}
-                if idx == len(chunks) - 1:
-                    payload.update(
-                        {
-                            "prompt_eval_count": prompt_tokens,
-                            "eval_count": completion_tokens,
-                            "total_duration": int(duration_ms * 1_000_000),
-                        }
-                    )
-                yield payload
+            try:
+                yield {
+                    "message": {"content": ""},
+                    "prompt_eval_count": est_prompt_tokens,
+                    "eval_count": 0,
+                    "total_duration": 0,
+                }
+
+                text = ""
+                prompt_tokens = est_prompt_tokens
+                duration_ms = 0.0
+                while True:
+                    if task.done():
+                        text, prompt_tokens, duration_ms = await task
+                        break
+                    await asyncio.sleep(0.1)
+
+                completion_tokens = _est_tokens(text)
+                chunks = _split_stream_text(text)
+                for idx, piece in enumerate(chunks):
+                    payload = {"message": {"content": piece}}
+                    if idx == len(chunks) - 1:
+                        payload.update(
+                            {
+                                "prompt_eval_count": prompt_tokens,
+                                "eval_count": completion_tokens,
+                                "total_duration": int(duration_ms * 1_000_000),
+                            }
+                        )
+                    yield payload
+            finally:
+                if not task.done():
+                    task.cancel()
 
         return _gen()
 

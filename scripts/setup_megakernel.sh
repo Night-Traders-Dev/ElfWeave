@@ -54,6 +54,31 @@ echo "Building megakernel CUDA extension..."
 "${PYTHON_BIN}" -m pip install --no-build-isolation -e "${REPO_ROOT}/third_party/luce-megakernel"
 
 echo ""
+echo "Caching Qwen/Qwen3.5-0.8B weights..."
+"${PYTHON_BIN}" - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+snapshot_download(
+    repo_id="Qwen/Qwen3.5-0.8B",
+    allow_patterns=[
+        "config.json",
+        "chat_template.jinja",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "tokenizer.model",
+        "special_tokens_map.json",
+        "generation_config.json",
+        "model.safetensors",
+        "model.safetensors.index.json",
+        "model.safetensors-*.safetensors",
+    ],
+)
+PY
+
+echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  ✓ Megakernel setup complete!"
 echo "═══════════════════════════════════════════════════════════"

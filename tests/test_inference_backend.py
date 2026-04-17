@@ -1,3 +1,5 @@
+import asyncio
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -90,6 +92,55 @@ class InferenceBackendTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(allowed)
         self.assertIn("only supports", reason)
+
+    async def test_runtime_stream_yields_immediate_metrics(self) -> None:
+        runtime = MegaKernelRuntime("/tmp/megakernel", "Qwen/Qwen3.5-0.8B", max_tokens=8)
+
+        def _slow_generate(messages, max_tokens):
+            time.sleep(0.2)
+            return "ready", 42
+
+        runtime._generate_sync = _slow_generate
+
+        stream = await runtime.chat(
+            model="qwen3.5:0.8b",
+            messages=[{"role": "user", "content": "say ready"}],
+            stream=True,
+            options={"num_predict": 8},
+        )
+
+        first = await asyncio.wait_for(anext(stream), timeout=0.05)
+        self.assertEqual(first["prompt_eval_count"], 3)
+        self.assertEqual(first["eval_count"], 0)
+
+        chunks = []
+        async for chunk in stream:
+            chunks.append(chunk)
+
+        self.assertEqual(chunks[-1]["message"]["content"], "ready")
+        self.assertEqual(chunks[-1]["prompt_eval_count"], 42)
+        self.assertEqual(chunks[-1]["eval_count"], 1)
+
+    async def test_runtime_stream_close_is_non_blocking(self) -> None:
+        runtime = MegaKernelRuntime("/tmp/megakernel", "Qwen/Qwen3.5-0.8B", max_tokens=8)
+
+        def _slow_generate(messages, max_tokens):
+            time.sleep(0.3)
+            return "ready", 42
+
+        runtime._generate_sync = _slow_generate
+
+        stream = await runtime.chat(
+            model="qwen3.5:0.8b",
+            messages=[{"role": "user", "content": "say ready"}],
+            stream=True,
+            options={"num_predict": 8},
+        )
+        await asyncio.wait_for(anext(stream), timeout=0.05)
+
+        t0 = time.perf_counter()
+        await asyncio.wait_for(stream.aclose(), timeout=0.05)
+        self.assertLess(time.perf_counter() - t0, 0.05)
 
     async def test_phase_routes_to_megakernel(self) -> None:
         ollama = _FakeOllama()
