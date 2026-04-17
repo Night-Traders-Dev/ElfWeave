@@ -14,7 +14,10 @@ Specifically optimized for hardware with **8GB VRAM (RTX 5060)** and 32GB RAM, u
 - **Lower Tooling Overhead**: Specialist subprocesses now reuse the active Python interpreter instead of spawning nested `uv run` environments inside a mission.
 - **Relevance-Based Memory**: The planner now retrieves the most relevant prior successes and failures for the current query instead of only the most recent history.
 - **Optional Megakernel Backend**: ElfWeave can experimentally route selected planning and validation phases through the Luce Megakernel backend while keeping Ollama as the safe default.
-- **Hardware-Aware Tuning**: Optimized for local environment using **qwen2.5:7b** for planning and **llama3.1:8b** for high-fidelity code generation and validation.
+- **Hardware-Aware Tuning**: Optimized for 8GB VRAM using a tiered model strategy:
+  - **qwen3.5:4b** for complex planning and tool orchestration (~3-4GB VRAM)
+  - **qwen3.5:2b** for general agent tasks (~1.5-2GB VRAM)
+  - **qwen3.5:0.8b** for lightweight sanity checks and validation (~0.5-1GB VRAM)
 
 ## 🛠 Project Structure
 
@@ -43,7 +46,7 @@ src/
 ## 🧠 Autonomous Learning & Self-Audit
 
 ElfWeave implements a "Closed-Loop" evolutionary lifecycle:
-1. **Validation Audit**: The Reviewer model (**llama3.1:8b**) scores every task.
+1. **Validation Audit**: The Reviewer model (**qwen3.5:0.8b**) performs fast sanity checks and validation scoring.
 2. **Failure Analysis**: If a task fails, the `analyze_failure` tool performs a technical root-cause diagnosis.
 3. **Research Fix**: For ambiguous errors, the agent performs a targeted web search to find best practices.
 4. **Autonomous Repair**: The `repair_code` tool applies an LLM-generated patch to the module's source code on disk.
@@ -139,7 +142,12 @@ Important limitations:
 ## 📦 Getting Started
 
 1. **Install Dependencies**: `uv sync`
-2. **Setup Ollama**: Ensure `ollama` is running with `llama3.1:8b` and `qwen2.5:7b` pulled.
+2. **Setup Ollama**: Ensure `ollama` is running and pull the required models:
+   ```bash
+   ollama pull qwen3.5:4b      # Planning (complex reasoning)
+   ollama pull qwen3.5:2b      # Agent tasks (balanced)
+   ollama pull qwen3.5:0.8b    # Checks/validation (lightweight, fast)
+   ```
 3. **Run a Mission**:
    ```bash
    uv run --with browser-use --with ollama python main.py "Show me the project structure"
