@@ -1,4 +1,4 @@
-import importlib.util
+import importlib
 import json
 import re
 import subprocess
@@ -81,6 +81,11 @@ class MegaKernelRuntime:
                 "the qwen35_megakernel_bf16_C extension is not built; "
                 "install the submodule with `pip install -e third_party/luce-megakernel`"
             )
+        try:
+            importlib.import_module("torch")
+            importlib.import_module("qwen35_megakernel_bf16_C")
+        except Exception as exc:
+            return f"megakernel extension failed to load: {exc}"
         return ""
 
     async def availability_reason(self) -> str:

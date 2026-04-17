@@ -1,4 +1,7 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from src.common.ollama import InferenceClient, MegaKernelRuntime
 
@@ -44,6 +47,24 @@ class _FakeMegakernel:
 
 
 class InferenceBackendTests(unittest.IsolatedAsyncioTestCase):
+    def test_availability_reason_reports_extension_load_failures(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            runtime = MegaKernelRuntime(tmpdir, "Qwen/Qwen3.5-0.8B", max_tokens=256)
+            Path(tmpdir, "model.py").write_text("# stub\n", encoding="utf-8")
+
+            with patch("src.common.ollama.importlib.util.find_spec", return_value=object()), \
+                 patch("src.common.ollama.importlib.import_module") as import_module:
+                def _fake_import(name: str):
+                    if name == "qwen35_megakernel_bf16_C":
+                        raise ImportError("libc10.so: cannot open shared object file")
+                    return object()
+
+                import_module.side_effect = _fake_import
+                reason = runtime.availability_reason_sync()
+
+        self.assertIn("failed to load", reason)
+        self.assertIn("libc10.so", reason)
+
     def test_runtime_rejects_requests_that_exceed_true_context_budget(self) -> None:
         runtime = MegaKernelRuntime("/tmp/megakernel", "Qwen/Qwen3.5-0.8B", max_tokens=256)
         runtime._prompt_token_count_sync = lambda messages: 1800
