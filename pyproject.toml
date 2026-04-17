@@ -27,11 +27,13 @@ megakernel = [
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu121" }
-torchvision = { index = "pytorch-cu121" }
-torchaudio = { index = "pytorch-cu121" }
+torch = { index = "pytorch-cu132" }
+torchvision = { index = "pytorch-cu132" }
+torchaudio = { index = "pytorch-cu132" }
+[tool.uv.extra-build-dependencies]
+file = ["setuptools"]
