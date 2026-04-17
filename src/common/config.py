@@ -1,4 +1,5 @@
 from textwrap import dedent
+import multiprocessing
 
 # ══════════════════════════════════════════════════════════════════════
 #  Hardware & Performance Config (RTX 5060 8GB / 32GB RAM)
