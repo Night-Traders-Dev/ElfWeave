@@ -191,11 +191,7 @@ def save_experience(query: str, aligned: bool, score: float, issues: list[str], 
             f.write(json.dumps(entry) + "\n")
     except Exception:
         pass
-      "quality_score": 0.0 (0.0 to 1.0),
-      "issues": ["missing X", "incorrect Y", ...],
-      "notes": "critical summary of quality"
-    }
-""")
+
 
 # ══════════════════════════════════════════════════════════════════════
 #  Tool registry
