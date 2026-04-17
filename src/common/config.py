@@ -24,10 +24,14 @@ OLLAMA_NUM_GPU      = 99        # Force max layers offload
 OLLAMA_NUM_THREAD   = multiprocessing.cpu_count() // 2
 
 # Model Selection (Tiered for 8GB VRAM)
+# Note: qwen3.5:0.8b is ideal for lightweight tasks (CHECKER, REVIEW) using ~0.5-1GB VRAM
+#       qwen3.5:2b provides better reasoning for moderate tasks (~1.5-2GB VRAM)
+#       qwen3.5:4b recommended for complex planning and tool orchestration (~3-4GB VRAM)
+#       qwen3.5:9b only when VRAM allows or for high-fidelity generation (~6-7GB VRAM)
 PLANNER_MODEL       = os.getenv("ELFWEAVE_PLANNER_MODEL", "qwen3.5:4b")      # Stronger at tool-use/reasoning
-CHECKER_MODEL       = os.getenv("ELFWEAVE_CHECKER_MODEL", "qwen3.5:2b")     # Reliable for sanity checks
-REVIEW_MODEL        = os.getenv("ELFWEAVE_REVIEW_MODEL", "qwen3.5:2b")      # Standard validation model
-AGENT_MODEL         = os.getenv("ELFWEAVE_AGENT_MODEL", "qwen3.5:9b")       # Default persona model
+CHECKER_MODEL       = os.getenv("ELFWEAVE_CHECKER_MODEL", "qwen3.5:0.8b")   # Lightweight sanity checks (0.8B works great here)
+REVIEW_MODEL        = os.getenv("ELFWEAVE_REVIEW_MODEL", "qwen3.5:0.8b")    # Lightweight validation (0.8B works great here)
+AGENT_MODEL         = os.getenv("ELFWEAVE_AGENT_MODEL", "qwen3.5:2b")       # Default persona model (balanced performance/VRAM)
 DEFAULT_MODEL       = AGENT_MODEL
 
 REPO_ROOT           = Path(__file__).resolve().parents[2]
