@@ -110,11 +110,14 @@ PLANNER_SYSTEM = dedent("""\
       1. Use only tools listed in the catalogue.
       2. Specialist Priority: ALWAYS prefer specialized agents (weather, browser, knowledge_query) 
          over raw utilities (http_get, shell) for their respective domains.
-      3. Minimal Hallucination: Do NOT invent URLs or paths for http_get/shell unless they are provided in the query or by a previous step.
-      4. To pass a prior step's output as an arg value, use the string "{step_N}"
+      3. Minimal Hallucination: Do NOT invent arguments, URLs, or paths. Use only values 
+         provided in the query, catalogue signatures, or prior step outputs.
+      4. Signature Audit: Carefully match your "args" to the parameters in the catalogue.
+      5. Self-Correction: If a previous attempt failed, identify why (hallucinated arg? 
+         missing tool?) and adjust your plan accordingly.
+      6. To pass a prior step's output as an arg value, use the string "{step_N}"
          where N is the 0-based index of the prior step (e.g. "{step_0}").
-      5. Every step must have a clear, human-readable "description".
-      6. Respond with ONLY a JSON object — no markdown, no prose.
+      7. Respond with ONLY a JSON object — no markdown, no prose.
 
     {
       "rationale": "why this plan works",
@@ -159,13 +162,17 @@ class ToolDef:
         try:
             # We check if the function accepts ui/refresh/client
             params = inspect.signature(self.fn).parameters
+            
+            # Shielding: Strip any accidentally provided internal args from LLM-provided dictionary
+            clean_args = {k: v for k, v in args.items() if k not in ("ui", "refresh", "client")}
+            
             extra = {}
             if "ui" in params: extra["ui"] = ui
             if "refresh" in params: extra["refresh"] = refresh
             if "client" in params: extra["client"] = client
             
             if inspect.iscoroutinefunction(self.fn):
-                res = await self.fn(**args, **extra)
+                res = await self.fn(**clean_args, **extra)
             else:
                 res = self.fn(**args, **extra)
             return str(res)
@@ -193,6 +200,7 @@ def register_tool(name: str, description: str) -> Callable:
             f"{p.name}: {_ann(p)}"
             + (f" = {p.default!r}" if p.default != inspect.Parameter.empty else "")
             for p in inspect.signature(fn).parameters.values()
+            if p.name not in ("ui", "refresh", "client")
         )
         _TOOL_REGISTRY[name] = ToolDef(
             name=name,
@@ -422,28 +430,45 @@ async def tool_knowledge_query(query: str, ui: UIState, refresh: Callable) -> st
     ], ui, refresh)
 
 
-@register_tool("analyze_failure", "Root-cause diagnosis — analyze why a plan failed and suggest a specific fix for the harness or tool code.")
+@register_tool("analyze_failure", "Root-cause diagnosis — analyze why a plan failed by comparing logs against the codebase and tool signatures.")
 async def tool_analyze_failure(issues: str, plan_context: str, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
     # Target files for self-analysis
     files = list(Path(_root).rglob("*.py"))
     code_context = ""
-    for f in files[:5]: # Cap context for prototype
+    # Specifically search for files mentioned in the issues/traceback first
+    relevant_files = []
+    for f in files:
+        if f.name in issues:
+            relevant_files.append(f)
+    
+    # Fill up to 5 files
+    files_to_read = relevant_files + [f for f in files if f not in relevant_files]
+    for f in files_to_read[:5]:
         content = await asyncio.to_thread(f.read_text, errors="replace")
-        code_context += f"\n--- {f.name} ---\n{content[:2000]}"
+        code_context += f"\n--- {f.name} ---\n{content[:2500]}"
     
-    prompt = f"Validation Issues: {issues}\n\nPlan Context: {plan_context}\n\nCodebase Context: {code_context}\n\nIdentify the ROOT CAUSE and suggest a specific fix."
+    # Ingest the actual tool signatures for argument comparison
+    catalogue = _tool_catalogue()
     
-    # Using the shared client and streaming chat logic
+    prompt = (
+        f"FAILURE LOGS:\n{issues}\n\n"
+        f"PLAN ATTEMPTED:\n{plan_context}\n\n"
+        f"TOOL CATALOGUE (Authoritative Signatures):\n{catalogue}\n\n"
+        f"CODE CONTEXT:\n{code_context}\n\n"
+        "Analyze the logs. Was there a TypeError (argument mismatch)? A NameError (missing import)? "
+        "Identify the ROOT CAUSE and suggest a SPECIFIC FIX (e.g., 'Do not pass the ui argument to tool X')."
+    )
+    
     res, _ = await _chat_json(
         client,
         PLANNER_MODEL,
-        "You are a self-healing AI coordinator. Identify the root cause of failures. Return JSON: { \"cause\": \"string\", \"fix\": \"string\" }",
+        "You are an expert systems debugger. Perform a technical root-cause analysis. Use Chain-of-Thought for the 'cause' field. Return JSON: { \"cause\": \"...\", \"fix\": \"...\" }",
         prompt,
         ui,
         refresh,
         "analyzer"
     )
-    return f"Cause: {res.get('cause')}\nFix Suggestion: {res.get('fix')}"
+    return f"Cause Analysis: {res.get('cause')}\nRecommended Fix: {res.get('fix')}"
 
 # ══════════════════════════════════════════════════════════════════════
 #  Data models
