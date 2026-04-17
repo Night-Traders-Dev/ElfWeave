@@ -23,10 +23,10 @@ OLLAMA_NUM_GPU      = 99        # Force max layers offload
 OLLAMA_NUM_THREAD   = multiprocessing.cpu_count() // 2
 
 # Model Selection (Tiered for 8GB VRAM)
-PLANNER_MODEL       = os.getenv("ELFWEAVE_PLANNER_MODEL", "qwen2.5:7b")      # Stronger at tool-use/reasoning
-CHECKER_MODEL       = os.getenv("ELFWEAVE_CHECKER_MODEL", "llama3.1:8b")     # Reliable for sanity checks
-REVIEW_MODEL        = os.getenv("ELFWEAVE_REVIEW_MODEL", "llama3.1:8b")      # Standard validation model
-AGENT_MODEL         = os.getenv("ELFWEAVE_AGENT_MODEL", "llama3.1:8b")       # Default persona model
+PLANNER_MODEL       = os.getenv("ELFWEAVE_PLANNER_MODEL", "qwen3.5:4b")      # Stronger at tool-use/reasoning
+CHECKER_MODEL       = os.getenv("ELFWEAVE_CHECKER_MODEL", "qwen3.5:2b")     # Reliable for sanity checks
+REVIEW_MODEL        = os.getenv("ELFWEAVE_REVIEW_MODEL", "qwen3.5:2b")      # Standard validation model
+AGENT_MODEL         = os.getenv("ELFWEAVE_AGENT_MODEL", "qwen3.5:9b")       # Default persona model
 DEFAULT_MODEL       = AGENT_MODEL
 
 REPO_ROOT           = Path(__file__).resolve().parents[2]
