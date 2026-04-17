@@ -61,7 +61,9 @@ PLANNER_SYSTEM = dedent("""\
          or analysis) before retrying the task.
       7. To pass a prior step's output as an arg value, use the string "{step_N}"
          where N is the 0-based index of the prior step (e.g. "{step_0}").
-      8. Respond with ONLY a JSON object — no markdown, no prose.
+      8. Use past lessons to avoid repeating failed tool sequences or bad arguments.
+      9. Use `knowledge_query` when repo-local context would materially improve the plan.
+      10. Respond with ONLY a JSON object — no markdown, no prose.
 
     {
       "rationale": "why this plan works",

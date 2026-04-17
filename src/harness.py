@@ -43,6 +43,18 @@ def _read_query(parts: list[str], prompt: str) -> str | None:
     except EOFError:
         return None
 
+
+def _build_retry_feedback(results: list, validation: dict) -> str:
+    lines = []
+    for idx, result in enumerate(results):
+        status = "error" if result.error else "ok"
+        lines.append(f"step {idx} [{result.plan_step.tool}] {status}: {result.output[:500]}")
+    if validation.get("issues"):
+        lines.append(f"validator issues: {validation.get('issues')}")
+    if validation.get("suggested_fix"):
+        lines.append(f"validator suggested_fix: {validation.get('suggested_fix')}")
+    return "\n".join(lines)
+
 async def run(query: str, dry_run: bool = False) -> int:
     ui = UIState(agent_name="agent-harness", model_info=f"{CHECKER_MODEL} · {PLANNER_MODEL}")
     plan, results = [], []
@@ -91,7 +103,8 @@ async def run(query: str, dry_run: bool = False) -> int:
                 if aligned or score >= 0.7:
                     s_val.done(f"✓ score={score:.0%}"); aligned = True
                 else:
-                    s_val.error(f"✗ score={score:.0%}"); last_feedback = str(val.get("issues", []))
+                    s_val.error(f"✗ score={score:.0%}")
+                    last_feedback = _build_retry_feedback(results, val)
                     retry_count += 1
                 refresh()
 

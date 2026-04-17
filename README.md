@@ -11,6 +11,8 @@ Specifically optimized for hardware with **8GB VRAM (RTX 5060)** and 32GB RAM, u
 - **Persistent Experience Store**: Long-term memory at `~/.agent_experience.jsonl` tracks every success and failure, allowing the orchestrator to "remember" and avoid past mistakes.
 - **Responsive Terminal UI**: Shared live status, cards, and summaries now adapt to narrow and wide terminals so agents stay readable from compact shells to full-screen panes.
 - **Consistent Harness Output**: Specialist agents emit concise harness-mode summaries so the orchestrator shows one clean result card instead of nested dashboards.
+- **Lower Tooling Overhead**: Specialist subprocesses now reuse the active Python interpreter instead of spawning nested `uv run` environments inside a mission.
+- **Relevance-Based Memory**: The planner now retrieves the most relevant prior successes and failures for the current query instead of only the most recent history.
 - **Hardware-Aware Tuning**: Optimized for local environment using **qwen2.5:7b** for planning and **llama3.1:8b** for high-fidelity code generation and validation.
 
 ## 🛠 Project Structure
@@ -45,6 +47,7 @@ ElfWeave implements a "Closed-Loop" evolutionary lifecycle:
 3. **Research Fix**: For ambiguous errors, the agent performs a targeted web search to find best practices.
 4. **Autonomous Repair**: The `repair_code` tool applies an LLM-generated patch to the module's source code on disk.
 5. **Memory Retrieval**: The Planner consults past lessons from the Experience Store to avoid regressions.
+6. **Relevant Retry Feedback**: Failed runs feed tool output and validator guidance back into the next planning attempt so the system can actively learn inside a single mission.
 
 ## 🖥 UI Behavior
 
@@ -52,6 +55,7 @@ ElfWeave implements a "Closed-Loop" evolutionary lifecycle:
 - **Compact mode**: tables shed lower-value columns before they overflow.
 - **Harness mode**: specialists return plain, width-conscious summaries so the top-level harness owns the final presentation.
 - **Shared chrome**: step rows, cards, and validation blocks all use the same responsive sizing rules from `src/common/ui.py`.
+- **Interpreter reuse**: tool subprocesses inherit the live mission environment, which removes nested `uv` environment churn and reduces startup overhead.
 
 ## 🤖 Agent Roster & Examples
 

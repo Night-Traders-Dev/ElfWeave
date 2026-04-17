@@ -677,6 +677,7 @@ name = "elfweave"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "langchain-ollama" },
     { name = "numpy" },
     { name = "ollama" },
     { name = "rich" },
@@ -697,6 +698,7 @@ knowledge = [
 requires-dist = [
     { name = "browser-use", marker = "extra == 'browser'" },
     { name = "faiss-cpu", marker = "extra == 'knowledge'" },
+    { name = "langchain-ollama" },
     { name = "langchain-ollama", marker = "extra == 'browser'" },
     { name = "numpy" },
     { name = "ollama" },

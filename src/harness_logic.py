@@ -9,14 +9,13 @@ import asyncio
 import inspect
 import json
 import re
-import shlex
+import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, List, Dict, Optional, Tuple
+from typing import Any, Callable, List, Dict, Optional
 
 from ollama import AsyncClient
-from rich.console import Console
 
 from src.common.ui import UIState
 from src.common.ollama import _stream_chat
@@ -156,6 +155,9 @@ async def tool_llm_summarize(text: str, client: AsyncClient, max_sentences: int 
 #  Specialist Wrappers
 # ══════════════════════════════════════════════════════════════════════
 
+def _tool_python_args(script: str, *args: str) -> List[str]:
+    return [sys.executable, "-u", script, *args]
+
 async def _run_tool_subprocess(args: List[str], ui: UIState, refresh: Callable) -> str:
     proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     stdout, stderr = [], []
@@ -174,23 +176,23 @@ async def _run_tool_subprocess(args: List[str], ui: UIState, refresh: Callable) 
 
 @register_tool("weather", "PRIMARY weather Specialist.")
 async def tool_weather(location: str, ui: UIState, refresh: Callable) -> str:
-    return await _run_tool_subprocess(["uv", "run", "--with", "ollama", "--with", "rich", "--with", "timezonefinder", "python", "src/modules/weather.py", f"weather in {location}", "--harness"], ui, refresh)
+    return await _run_tool_subprocess(_tool_python_args("src/modules/weather.py", f"weather in {location}", "--harness"), ui, refresh)
 
 @register_tool("browser", "Autonomous Web Specialist.")
 async def tool_browser(task: str, ui: UIState, refresh: Callable) -> str:
-    return await _run_tool_subprocess(["uv", "run", "--with", "browser-use", "--with", "langchain-ollama", "--with", "ollama", "--with", "rich", "python", "src/modules/browser_agent.py", task, "--harness"], ui, refresh)
+    return await _run_tool_subprocess(_tool_python_args("src/modules/browser_agent.py", task, "--harness"), ui, refresh)
 
 @register_tool("code_architect", "Design & Technical Debt Specialist.")
 async def tool_code_architect(files: List[str], ui: UIState, refresh: Callable) -> str:
-    return await _run_tool_subprocess(["uv", "run", "--with", "ollama", "--with", "rich", "python", "src/modules/code_architect.py", *files, "--harness"], ui, refresh)
+    return await _run_tool_subprocess(_tool_python_args("src/modules/code_architect.py", *files, "--harness"), ui, refresh)
 
 @register_tool("fs_manager", "Project Explorer Specialist.")
 async def tool_fs_manager(ui: UIState, refresh: Callable, path: str = ".") -> str:
-    return await _run_tool_subprocess(["uv", "run", "--with", "rich", "python", "src/modules/fs_manager.py", path, "--harness"], ui, refresh)
+    return await _run_tool_subprocess(_tool_python_args("src/modules/fs_manager.py", path, "--harness"), ui, refresh)
 
 @register_tool("knowledge_query", "Search the local knowledge base or repository text.")
 async def tool_knowledge_query(query: str, ui: UIState, refresh: Callable) -> str:
-    return await _run_tool_subprocess(["uv", "run", "--with", "rich", "--with", "numpy", "python", "src/modules/knowledge_agent.py", "--query", query, "--harness"], ui, refresh)
+    return await _run_tool_subprocess(_tool_python_args("src/modules/knowledge_agent.py", "--query", query, "--harness"), ui, refresh)
 
 # ══════════════════════════════════════════════════════════════════════
 #  Self-Repair Meta-Tools
@@ -263,20 +265,70 @@ def load_history() -> List[Dict]:
 
 def save_history(history: List[Dict]): HISTORY_PATH.write_text(json.dumps(history, indent=2))
 
-def get_learned_lessons(limit: int = 5) -> str:
+def _tokenize_text(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9_]+", text.lower()))
+
+def get_learned_lessons(query: Optional[str] = None, limit: int = 5) -> str:
     if not EXPERIENCE_PATH.exists(): return "No past experiences."
     lessons = []
     try:
         with open(EXPERIENCE_PATH, "r") as f:
-            for line in f.readlines()[-limit:]:
-                e = json.loads(line)
-                lessons.append(f" - {'SUCCESS' if e.get('aligned') else 'FAILURE'}: {e.get('query')}\n   Issues: {e.get('issues')}\n   Fix: {e.get('fix')}")
+            entries = [json.loads(line) for line in f if line.strip()]
     except: return "Experience load error."
+
+    if not entries:
+        return "No experiences."
+
+    query_tokens = _tokenize_text(query or "")
+    ranked = []
+    for idx, entry in enumerate(entries):
+        haystack = " ".join(
+            str(entry.get(key, ""))
+            for key in ("query", "issues", "fix", "suggested_fix", "failure_output", "tool_trace")
+        )
+        score = idx / max(1, len(entries))
+        if query_tokens:
+            overlap = query_tokens & _tokenize_text(haystack)
+            score += len(overlap) * 10
+            if entry.get("query", "").strip().lower() == (query or "").strip().lower():
+                score += 25
+        ranked.append((score, entry))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    for _, e in ranked[:limit]:
+        tools = ", ".join(e.get("tools", [])[:4]) or "n/a"
+        lessons.append(
+            f" - {'SUCCESS' if e.get('aligned') else 'FAILURE'}: {e.get('query')}\n"
+            f"   Tools: {tools}\n"
+            f"   Issues: {e.get('issues')}\n"
+            f"   Suggested fix: {e.get('suggested_fix') or e.get('fix') or 'n/a'}"
+        )
     return "\n".join(lessons) or "No experiences."
 
 def save_experience(query: str, res: List[StepResult], validation: Dict, timestamp: str):
     fix = next((r.output for r in res if r.plan_step.tool == "repair_code" and not r.error), "")
-    entry = {"timestamp": timestamp, "query": query, "aligned": validation.get("aligned"), "score": validation.get("quality_score"), "issues": validation.get("issues"), "fix": fix}
+    failing = next((r for r in res if r.error), None)
+    entry = {
+        "timestamp": timestamp,
+        "query": query,
+        "aligned": validation.get("aligned"),
+        "score": validation.get("quality_score"),
+        "issues": validation.get("issues"),
+        "suggested_fix": validation.get("suggested_fix"),
+        "fix": fix,
+        "tools": [r.plan_step.tool for r in res],
+        "failure_tool": failing.plan_step.tool if failing else "",
+        "failure_output": failing.output if failing else "",
+        "tool_trace": [
+            {
+                "tool": r.plan_step.tool,
+                "description": r.plan_step.description,
+                "error": r.error,
+                "output_preview": r.output[:400],
+            }
+            for r in res
+        ],
+    }
     try:
         with open(EXPERIENCE_PATH, "a") as f: f.write(json.dumps(entry) + "\n")
     except: pass

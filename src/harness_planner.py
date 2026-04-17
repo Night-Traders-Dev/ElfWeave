@@ -35,7 +35,7 @@ async def validate_result(client: AsyncClient, query: str, results: List, ui: UI
 async def plan_task(client: AsyncClient, query: str, feedback: str, ui: UIState, refresh: Callable) -> Dict:
     from src.harness_logic import get_tool_catalogue, get_learned_lessons
     catalogue = get_tool_catalogue()
-    lessons = get_learned_lessons(limit=10)
+    lessons = get_learned_lessons(query=query, limit=10)
     prompt = f"USER QUERY: {query}\n\nTOOLS AVAILABLE:\n{catalogue}\n\nPAST LESSONS:\n{lessons}"
     if feedback: prompt += f"\n\nPRIOR ATTEMPT FEEDBACK:\n{feedback}"
     res, _ = await _chat_json(client, PLANNER_MODEL, PLANNER_SYSTEM, prompt, ui, refresh, "planner")
@@ -51,7 +51,7 @@ async def analyze_failure_logic(issues: str, plan_context: str, ui: UIState, ref
         content = await asyncio.to_thread(f.read_text, errors="replace")
         code_context += f"\n--- {f.name} ---\n{content[:2500]}"
     
-    past = get_learned_lessons(limit=10)
+    past = get_learned_lessons(query=issues, limit=10)
     prompt = f"LOGS:\n{issues}\n\nPLAN:\n{plan_context}\n\nTOOLS:\n{get_tool_catalogue()}\n\nPAST:\n{past}\n\nCODE:\n{code_context}"
     
     res, _ = await _chat_json(client, PLANNER_MODEL, "Analyze root cause and suggest fix. JSON: { \"cause\": \"...\", \"fix\": \"...\", \"needs_research\": bool }", prompt, ui, refresh, "analyzer")
