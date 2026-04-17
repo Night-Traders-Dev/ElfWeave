@@ -1,9 +1,11 @@
+import shutil
 import threading
 import time
-import asyncio
 from dataclasses import dataclass, field
-from typing import Any, List, Dict, Optional, Callable
+from typing import Any, List, Dict, Optional
 
+from rich import box
+from rich.cells import cell_len
 from rich.console import Group, RenderableType, Console
 from rich.text import Text
 from rich.panel import Panel
@@ -11,6 +13,46 @@ from rich.rule import Rule
 from rich.live import Live
 
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def console_width(console: Optional[Console] = None, minimum: int = 40) -> int:
+    if console is not None:
+        try:
+            return max(minimum, int(console.size.width))
+        except Exception:
+            pass
+    return max(minimum, shutil.get_terminal_size((100, 30)).columns)
+
+
+def is_compact_width(width: int) -> bool:
+    return width < 110
+
+
+def is_tiny_width(width: int) -> bool:
+    return width < 78
+
+
+def clip_text(text: Any, limit: int) -> str:
+    value = " ".join(str(text).split())
+    if limit <= 0:
+        return ""
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    return value[: limit - 1] + "…"
+
+
+def panel_padding_for_width(width: int, padding: tuple[int, int] = (1, 2)) -> tuple[int, int]:
+    if is_tiny_width(width):
+        return (0, 1)
+    if is_compact_width(width):
+        return (padding[0], 1)
+    return padding
+
+
+def panel_box_for_width(width: int):
+    return box.SIMPLE if is_compact_width(width) else box.ROUNDED
 
 @dataclass
 class Step:
@@ -45,7 +87,9 @@ class Step:
         self.detail = detail
         return self
 
-    def render(self, sp_frame: int, label_width: int = 24) -> Text:
+    def render(self, sp_frame: int, width: int, label_width: int = 24) -> Text:
+        width = max(40, width)
+        label_width = max(14, min(label_width, max(14, width // 3)))
         t = Text()
         t.append("  ")
         if self.state == "running":
@@ -61,17 +105,20 @@ class Step:
             t.append("·", "dim")
 
         col = "white" if self.state != "pending" else "grey50"
-        label = f"  {self.name}"
+        label = clip_text(f"  {self.name}", label_width)
         t.append(f"{label:<{label_width}}", col)
 
         if self.detail:
-            preview = self.detail[:52]
-            t.append(preview, "dim")
+            detail_budget = max(8, width - label_width - 12)
+            preview = clip_text(self.detail, detail_budget)
+            if preview:
+                t.append(" ")
+                t.append(preview, "dim")
 
         if self.elapsed_ms:
             elapsed = self.elapsed_ms
             ts = f"{elapsed:.0f}ms" if elapsed < 2000 else f"{elapsed / 1000:.1f}s"
-            padding = max(1, (label_width + 34) - len(self.name) - len(self.detail[:52]))
+            padding = max(1, width - cell_len(t.plain) - cell_len(ts) - 2)
             t.append(" " * padding)
             t.append(ts, "dim")
             if self.cached:
@@ -150,23 +197,26 @@ class UIState:
             usage   = dict(self.usage)
             running = self.running
 
+        width = console_width(self.console)
         parts: List[Any] = []
 
         # ── header ────────────────────────────────────────────────────
         hdr = Text()
         hdr.append("◆", "bold cyan")
-        hdr.append(f" {self.agent_name}", "bold white")
+        name_budget = max(14, width // 3)
+        hdr.append(f" {clip_text(self.agent_name, name_budget)}", "bold white")
         if self.model_info:
-            hdr.append(f"   {self.model_info}", "dim")
+            model_budget = max(10, width - cell_len(hdr.plain) - 6)
+            hdr.append(f"   {clip_text(self.model_info, model_budget)}", "dim")
         dot = "●" if running else "◉"
         hdr.append(f"   {dot}", "green" if running else "dim")
         parts.append(hdr)
         parts.append(Text(""))
 
         # ── steps ─────────────────────────────────────────────────────
-        label_width = 26 if "harness" in self.agent_name else 24
+        label_width = min(26 if "harness" in self.agent_name else 24, max(16, width // 4))
         for s in steps:
-            parts.append(s.render(frame, label_width=label_width))
+            parts.append(s.render(frame, width=width, label_width=label_width))
 
         # ── streaming output ──────────────────────────────────────────
         if any(c.strip() for c in chunks):
@@ -188,7 +238,12 @@ class UIState:
         foot.append("esc", "bold dim")
         foot.append(" to interrupt", "dim")
         if total_tok:
-            foot.append(f"  ·  prompt {total_tok - gen_tok:,}  gen {gen_tok:,}  total {total_tok:,}", "dim")
+            if is_tiny_width(width):
+                foot.append(f"  ·  {total_tok:,} tok", "dim")
+            elif is_compact_width(width):
+                foot.append(f"  ·  p {total_tok - gen_tok:,}  g {gen_tok:,}  t {total_tok:,}", "dim")
+            else:
+                foot.append(f"  ·  prompt {total_tok - gen_tok:,}  gen {gen_tok:,}  total {total_tok:,}", "dim")
         active = next((s for s in steps if s.state == "running"), None)
         if active:
             foot.append(f"  ·  {time.monotonic() - active._t0:.1f}s", "dim")
@@ -198,6 +253,7 @@ class UIState:
 
     def print_card(self, title: str, content: Any, border_color: str = "blue", metadata: Optional[str] = None, padding: tuple = (1, 2)) -> None:
         """Print a standard premium result card in the Claude Code / Weather UI style."""
+        width = console_width(self.console)
         self.console.print()
         self.console.print(Rule(f"[bold {border_color}]{title}[/bold {border_color}]", style=border_color))
         
@@ -205,9 +261,10 @@ class UIState:
             Panel(
                 content,
                 border_style=border_color,
-                padding=padding,
+                box=panel_box_for_width(width),
+                padding=panel_padding_for_width(width, padding),
                 expand=True,
-                subtitle=f"[dim]{metadata}[/dim]" if metadata else None
+                subtitle=f"[dim]{clip_text(metadata, max(20, width - 12))}[/dim]" if metadata else None
             )
         )
         self.console.print(Rule(style=border_color))

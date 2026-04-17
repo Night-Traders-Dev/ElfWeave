@@ -17,9 +17,9 @@ import argparse
 import asyncio
 from rich.tree import Tree
 
-from src.common.ui import UIState
+from src.common.ui import UIState, console_width
 from src.modules.fs_manager_logic import get_fs_stats
-from src.modules.fs_manager_ui import render_tree, render_stats_table
+from src.modules.fs_manager_ui import render_tree, render_stats_table, summarize_tree, summarize_stats
 
 async def run(target_dir: str, harness: bool = False) -> int:
     ui = UIState(agent_name="fs-manager", model_info="Local filesystem")
@@ -43,11 +43,18 @@ async def run(target_dir: str, harness: bool = False) -> int:
         # 1. Project Tree
         tree = Tree(f"[bold white]ROOT: {root_path.name}[/bold white]")
         await asyncio.to_thread(render_tree, root_path, tree)
-        ui.print_card("Repository Structure", tree, border_color="blue", padding=(0,1) if harness else (1,2))
+        if harness:
+            print(summarize_tree(root_path, console_width(console)))
+        else:
+            ui.print_card("Repository Structure", tree, border_color="blue")
 
         # 2. Stats Table
         st = render_stats_table(stats)
-        ui.print_card("Filesystem Analytics", st, border_color="green", padding=(0,1) if harness else (1,2))
+        if harness:
+            print()
+            print(summarize_stats(stats))
+        else:
+            ui.print_card("Filesystem Analytics", st, border_color="green")
     return 0
 
 if __name__ == "__main__":

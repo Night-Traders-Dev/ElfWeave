@@ -33,7 +33,7 @@ from rich.table import Table
 from rich.text import Text
 
 # Common imports
-from src.common.ui import UIState
+from src.common.ui import UIState, clip_text, console_width, is_compact_width, is_tiny_width, panel_box_for_width
 from src.common.ollama import setup_ollama, _stream_chat, _chat_json, _warmup
 from src.common.types import TokenUsage
 
@@ -166,6 +166,87 @@ def build_context(query: str, r: WeatherReport, comp: WeatherComparison, vision:
 #  Weather card (Rich)
 # ══════════════════════════════════════════════════════════════════════
 
+def _answer_sections(answer: str) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    current_key = None
+    for line in answer.splitlines():
+        for key in ("CURRENT:", "CHANGES:", "HOURLY:", "OUTLOOK:"):
+            if line.upper().startswith(key):
+                current_key = key.rstrip(":")
+                sections[current_key] = line[len(key):].strip()
+                break
+        else:
+            if current_key and line.strip():
+                sections[current_key] = sections[current_key] + "\n" + line.strip()
+    return sections
+
+
+def build_weather_harness_output(
+    r: WeatherReport,
+    comp: WeatherComparison,
+    prev_snap: Optional[MemorySnapshot],
+    answer: str,
+    vision: str,
+    width: int = 80,
+) -> str:
+    em, _ = _cstyle(r.desc)
+    lines = [f"{em} {clip_text(r.queried_location or r.location_label, width - 2)}"]
+    if r.location_label and r.location_label != r.queried_location:
+        lines.append(f"Grid: {clip_text(r.location_label, width - 6)}")
+    if r.lat and r.lon:
+        lines.append(f"Coords: {_coord(r.lat, r.lon)}")
+    if r.obs_time:
+        lines.append(f"Observed: {clip_text(_obs_to_local(r.obs_time, r.tz_name), width - 10)}")
+
+    lines.extend(
+        [
+            "",
+            "Current",
+            f"- {clip_text(f'{r.desc}, {r.temp_f}F (feels {r.feels_f}F), humidity {r.humidity}%, wind {r.wind_dir} {r.wind_mph} mph', width - 2)}",
+            f"- {clip_text(f'UV {_uv_label(r.uv_index)}, visibility {r.visibility_mi} mi, pressure {r.pressure_mb} mb, precip {r.precip_in} in', width - 2)}",
+        ]
+    )
+
+    lines.append("")
+    lines.append(f"Change vs {comp.previous_date}" if comp.found else "Change")
+    if comp.found and prev_snap:
+        for bullet in comp.bullets[:4]:
+            lines.append(f"- {clip_text(bullet, width - 2)}")
+    else:
+        lines.append("- No prior snapshot")
+
+    if r.forecast and r.forecast[0].hourly:
+        lines.append("")
+        lines.append("Today")
+        for slot in r.forecast[0].hourly[:8]:
+            prefix = "* " if slot.is_current else "- "
+            line = f"{slot.time_label}: {slot.desc}, {slot.temp_f}F, wind {slot.wind_dir} {slot.wind_mph}, rain {slot.rain_chance}%"
+            lines.append(prefix + clip_text(line, width - 4))
+
+    if r.forecast:
+        lines.append("")
+        lines.append("3-Day Forecast")
+        for i, day in enumerate(r.forecast):
+            label = _day_label(day.date, i)
+            line = f"{label}: {day.desc}, H {day.high_f}F / L {day.low_f}F, rain {day.rain_chance}%"
+            lines.append(f"- {clip_text(line, width - 2)}")
+
+    sections = _answer_sections(answer)
+    if sections:
+        lines.append("")
+        lines.append("Narrative")
+        for key in ("CURRENT", "CHANGES", "HOURLY", "OUTLOOK"):
+            if key in sections:
+                summary = clip_text(" ".join(sections[key].split()), max(24, width - 12))
+                lines.append(f"- {key.title()}: {summary}")
+
+    if vision:
+        lines.append("")
+        lines.append("Image")
+        lines.append(f"- {clip_text(' '.join(vision.split()), width - 2)}")
+
+    return "\n".join(lines)
+
 def print_weather_card(
     console: Console,
     r: WeatherReport,
@@ -175,8 +256,17 @@ def print_weather_card(
     vision: str,
     harness: bool = False,
 ) -> None:
+    width = console_width(console)
+    compact = harness or is_compact_width(width)
+    tiny = harness or is_tiny_width(width)
+    panel_box = panel_box_for_width(width)
+
+    if harness:
+        console.print(build_weather_harness_output(r, comp, prev_snap, answer, vision, width=width))
+        return
+
     em, ccol = _cstyle(r.desc)
-    hdr = Text(justify="left" if harness else "center")
+    hdr = Text(justify="center")
     hdr.append(f"\n  {em}  ", f"bold {ccol}")
     hdr.append(r.queried_location, "bold white")
     if r.location_label and r.location_label != r.queried_location:
@@ -186,14 +276,10 @@ def print_weather_card(
     if r.obs_time:
         hdr.append(f"\n  Observed {_obs_to_local(r.obs_time, r.tz_name)}", "grey50")
     hdr.append("\n")
-    if not harness:
-        console.print(Panel(hdr, border_style="blue", expand=True, box=box.DOUBLE_EDGE))
-    else:
-        # In harness mode, just print the header text to avoid double-boxing
-        console.print(hdr)
+    console.print(Panel(hdr, border_style="blue", expand=True, box=box.SIMPLE if compact else box.DOUBLE_EDGE, padding=(0, 1 if compact else 2)))
 
-    L = Table.grid(padding=(0, 2)); L.add_column(style="grey58"); L.add_column(style="bold white")
-    R = Table.grid(padding=(0, 2)); R.add_column(style="grey58"); R.add_column(style="bold white")
+    L = Table.grid(padding=(0, 1 if compact else 2)); L.add_column(style="grey58"); L.add_column(style="bold white")
+    R = Table.grid(padding=(0, 1 if compact else 2)); R.add_column(style="grey58"); R.add_column(style="bold white")
 
     tt = Text(); tt.append(f"{r.temp_f}°F", f"bold {ccol}"); tt.append(f"  feels {r.feels_f}°F", "white")
     uvt = Text(); uvt.append(_uv_label(r.uv_index), _uv_col(r.uv_index))
@@ -210,29 +296,39 @@ def print_weather_card(
     R.add_row("🌧 Precip",      Text(f"{r.precip_in} in",       "sky_blue1"))
     R.add_row("🌥 Cloud cover", Text(f"{_bar(r.cloud_cover)}  {r.cloud_cover}%", "grey74"))
 
-    # Current Conditions - remove equal=True to save space on labels
-    cond_node = Columns([L, R], equal=False, expand=True)
-    if not harness:
-        console.print(Panel(cond_node, title="[bold]Current Conditions[/bold]", expand=True, border_style=ccol, box=box.ROUNDED))
+    if tiny:
+        cond_node = Table.grid(padding=(0, 1))
+        cond_node.add_column(style="grey58")
+        cond_node.add_column(style="bold white")
+        cond_node.add_row("🌡 Temp", tt)
+        cond_node.add_row("☁ Conditions", Text(r.desc, ccol))
+        cond_node.add_row("💦 Humidity", Text(f"{r.humidity}%", "cyan"))
+        cond_node.add_row("🌬 Wind", Text(f"{r.wind_dir} {r.wind_mph} mph", "sky_blue1"))
+        cond_node.add_row("☀ UV Index", uvt)
+        cond_node.add_row("👁 Visibility", Text(f"{r.visibility_mi} mi", "white"))
+        cond_node.add_row("📊 Pressure", Text(f"{r.pressure_mb} mb", "white"))
+        cond_node.add_row("🌧 Precip", Text(f"{r.precip_in} in", "sky_blue1"))
+        cond_node.add_row("🌥 Cloud cover", Text(f"{r.cloud_cover}%", "grey74"))
     else:
-        console.print(Rule("[bold]Current Conditions[/bold]", style=ccol))
-        console.print(cond_node)
+        cond_node = Columns([L, R], equal=False, expand=True)
+    console.print(Panel(cond_node, title="[bold]Current Conditions[/bold]", expand=True, border_style=ccol, box=panel_box, padding=(0, 1 if compact else 2)))
 
     if r.forecast and r.forecast[0].hourly:
         ht = Table(box=box.SIMPLE_HEAD, expand=True, show_header=True, header_style="bold white")
-        ht.add_column("Time",       style="bold white")
+        ht.add_column("Time", style="bold white", no_wrap=True)
         ht.add_column("Conditions")
         ht.add_column("Temp",       justify="right", style="bold")
-        if not harness:
-            ht.add_column("Feels",      justify="right", style="dim white")
-            ht.add_column("Hum",        justify="right", style="cyan")
-        ht.add_column("Wind",       justify="right", style="sky_blue1")
-        if not harness:
-            ht.add_column("UV",         justify="center")
-        ht.add_column("🌧",         justify="right", style="sky_blue1")
-        if not harness:
+        if not tiny:
+            ht.add_column("Wind", justify="right", style="sky_blue1")
+        if not compact:
+            ht.add_column("Feels", justify="right", style="dim white")
+            ht.add_column("Hum", justify="right", style="cyan")
+            ht.add_column("UV", justify="center")
+            ht.add_column("🌧", justify="right", style="sky_blue1")
             ht.add_column("❄",          justify="right", style="cyan")
             ht.add_column("Cloud",      justify="right", style="grey74")
+        else:
+            ht.add_column("Rain", justify="right", style="sky_blue1")
 
         for slot in r.forecast[0].hourly:
             se, sc = _cstyle(slot.desc)
@@ -244,51 +340,59 @@ def print_weather_card(
                       "bold yellow3" if tf < 80 else "bold red")
             except Exception: tc = "white"
             uvt2 = Text(_uv_label(slot.uv_index), _uv_col(slot.uv_index))
-            row_args = [slot.time_label + now_mark, Text(f"{se} {slot.desc}", sc), Text(f"{slot.temp_f}°F", tc)]
-            if not harness:
-                row_args.extend([f"{slot.feels_f}°F", f"{slot.humidity}%"])
-            row_args.append(f"{slot.wind_dir} {slot.wind_mph}")
-            if not harness:
-                row_args.append(uvt2)
-            row_args.append(f"{slot.rain_chance}%")
-            if not harness:
+            row_args = [
+                slot.time_label + now_mark,
+                Text(clip_text(f"{se} {slot.desc}", 16 if tiny else 24), sc),
+                Text(f"{slot.temp_f}°F", tc),
+            ]
+            if not tiny:
+                row_args.append(f"{slot.wind_dir} {slot.wind_mph}")
+            if not compact:
+                row_args.extend([f"{slot.feels_f}°F", f"{slot.humidity}%", uvt2, f"{slot.rain_chance}%"])
                 row_args.extend([f"{slot.snow_chance}%", f"{slot.cloud_cover}%"])
-            
+            else:
+                row_args.append(f"{slot.rain_chance}%")
+
             ht.add_row(*row_args, style=row_style)
 
-        if not harness:
-            console.print(Panel(ht, title=f"[bold]Today's Hourly Forecast[/bold]", expand=True, border_style="cyan", box=box.ROUNDED))
-        else:
-            console.print(Rule("[bold]Today's Hourly Forecast[/bold]", style="cyan"))
-            console.print(ht)
+        console.print(Panel(ht, title=f"[bold]Today's Hourly Forecast[/bold]", expand=True, border_style="cyan", box=panel_box, padding=(0, 1 if compact else 2)))
 
     if comp.found and prev_snap:
-        dt = Table(box=box.SIMPLE, expand=True, show_header=True, header_style="bold grey50")
-        dt.add_column("Field",    style="grey58",   min_width=14); dt.add_column("Previous", justify="right",  style="white")
-        dt.add_column("Now",      justify="right",  style="bold white"); dt.add_column("Δ",        justify="right")
-        rows = [("🌡 Temp °F",  prev_snap.temp_f,  r.temp_f,   "°F"), ("🌡 Feels °F", prev_snap.feels_f, r.feels_f,  "°F"),
-                ("💦 Humidity", prev_snap.humidity, r.humidity, "%"), ("🌬 Wind mph", prev_snap.wind_mph, r.wind_mph, ""),
-                ("☁ Cond.",    prev_snap.desc,     r.desc,     None), ("🌥 Cloud %",  prev_snap.cloud_cover, r.cloud_cover, "%")]
-        for label, old, new, unit in rows:
-            delta = Text("changed", "yellow") if unit is None and old != new else Text("same", "grey50") if unit is None else _delta_text(new, old, unit)
-            dt.add_row(label, str(old), str(new), delta)
-        console.print(Panel(dt, title=f"[bold]vs {comp.previous_date}[/bold]",
-                            expand=False if harness else True,
-                            border_style="magenta", box=box.SIMPLE if harness else box.ROUNDED))
+        if tiny:
+            bullets = Text()
+            for bullet in comp.bullets[:5]:
+                bullets.append(f"- {bullet}\n", "white")
+            console.print(Panel(bullets, title=f"[bold]vs {comp.previous_date}[/bold]", expand=True, border_style="magenta", box=panel_box, padding=(0, 1)))
+        else:
+            dt = Table(box=box.SIMPLE, expand=True, show_header=True, header_style="bold grey50")
+            dt.add_column("Field",    style="grey58",   min_width=14)
+            dt.add_column("Previous", justify="right",  style="white")
+            dt.add_column("Now",      justify="right",  style="bold white")
+            dt.add_column("Δ",        justify="right")
+            rows = [("🌡 Temp °F",  prev_snap.temp_f,  r.temp_f,   "°F"), ("🌡 Feels °F", prev_snap.feels_f, r.feels_f,  "°F"),
+                    ("💦 Humidity", prev_snap.humidity, r.humidity, "%"), ("🌬 Wind mph", prev_snap.wind_mph, r.wind_mph, ""),
+                    ("☁ Cond.",    prev_snap.desc,     r.desc,     None), ("🌥 Cloud %",  prev_snap.cloud_cover, r.cloud_cover, "%")]
+            for label, old, new, unit in rows:
+                delta = Text("changed", "yellow") if unit is None and old != new else Text("same", "grey50") if unit is None else _delta_text(new, old, unit)
+                dt.add_row(label, str(old), str(new), delta)
+            console.print(Panel(dt, title=f"[bold]vs {comp.previous_date}[/bold]", expand=True, border_style="magenta", box=panel_box, padding=(0, 1 if compact else 2)))
     elif not comp.found:
         console.print(Panel(Text("No prior snapshot — run again tomorrow to compare.", "grey50"),
                             title="[bold]Prior-Day Comparison[/bold]", 
-                            expand=False if harness else True,
-                            border_style="grey35", box=box.ROUNDED))
+                            expand=True,
+                            border_style="grey35", box=panel_box, padding=(0, 1 if compact else 2)))
 
     if r.forecast:
         ft = Table(box=box.SIMPLE_HEAD, expand=True, show_header=True, header_style="bold white")
-        ft.add_column("Day",       style="bold white"); ft.add_column("Conditions")
-        ft.add_column("High",      justify="right", style="bold red"); ft.add_column("Low",       justify="right", style="bold cyan")
-        if not harness:
-            ft.add_column("UV",        justify="center")
-        ft.add_column("🌧 Rain",   justify="right", style="sky_blue1")
-        if not harness:
+        ft.add_column("Day", style="bold white")
+        if not tiny:
+            ft.add_column("Conditions")
+        ft.add_column("High", justify="right", style="bold red")
+        ft.add_column("Low", justify="right", style="bold cyan")
+        if not compact:
+            ft.add_column("UV", justify="center")
+        ft.add_column("🌧 Rain", justify="right", style="sky_blue1")
+        if not compact:
             ft.add_column("❄ Snow",    justify="right", style="cyan")
             ft.add_column("Sunrise",   justify="right", style="yellow3")
             ft.add_column("Sunset",    justify="right", style="orange3")
@@ -296,39 +400,42 @@ def print_weather_card(
         for i, day in enumerate(r.forecast):
             fe, _ = _cstyle(day.desc); moon = f"{_moon_em(day.moon_phase)} {day.moon_phase}"
             if day.moon_illumination: moon += f" {day.moon_illumination}%"
-            row_args = [_day_label(day.date, i), f"{fe} {day.desc}" if day.desc else "—", f"{day.high_f}°F", f"{day.low_f}°F"]
-            if not harness:
+            row_args = [_day_label(day.date, i)]
+            if not tiny:
+                row_args.append(clip_text(f"{fe} {day.desc}" if day.desc else "—", 24 if compact else 30))
+            row_args.extend([f"{day.high_f}°F", f"{day.low_f}°F"])
+            if not compact:
                 row_args.append(Text(_uv_label(day.uv_index), _uv_col(day.uv_index)))
             row_args.append(f"{day.rain_chance}%")
-            if not harness:
+            if not compact:
                 row_args.extend([f"{day.snow_chance}%", day.sunrise or "—", day.sunset or "—", moon or "—"])
             
             ft.add_row(*row_args)
-        console.print(Panel(ft, title="[bold]3-Day Forecast[/bold]",
-                            expand=True,
-                            border_style="yellow3", box=box.SIMPLE if harness else box.ROUNDED))
+        console.print(Panel(ft, title="[bold]3-Day Forecast[/bold]", expand=True, border_style="yellow3", box=panel_box, padding=(0, 1 if compact else 2)))
 
     if vision:
-        console.print(Panel(Text(vision, "white"), title="[bold]🛰  Image Analysis[/bold]", 
-                            expand=False if harness else True,
-                            border_style="blue", box=box.ROUNDED))
+        console.print(Panel(Text(vision, "white"), title="[bold]🛰  Image Analysis[/bold]", expand=True, border_style="blue", box=panel_box, padding=(0, 1 if compact else 2)))
 
     if answer:
-        sections: dict[str, str] = {}
-        current_key = None
-        for line in answer.splitlines():
-            for key in ("CURRENT:", "CHANGES:", "HOURLY:", "OUTLOOK:"):
-                if line.upper().startswith(key):
-                    current_key = key.rstrip(":"); sections[current_key] = line[len(key):].strip(); break
-            else:
-                if current_key and line.strip(): sections[current_key] = sections[current_key] + "\n" + line
+        sections = _answer_sections(answer)
         if sections:
-            sec_table = Table.grid(padding=(0, 2)); sec_table.add_column(style="bold cyan", min_width=10); sec_table.add_column(style="white")
-            for key in ("CURRENT", "CHANGES", "HOURLY", "OUTLOOK"):
-                if key in sections: sec_table.add_row(key, sections[key].strip())
-            console.print(Panel(sec_table, title=f"[bold]🤖 {AGENT_MODEL}[/bold]", border_style="green", box=box.ROUNDED))
+            if tiny:
+                narrative = Text()
+                for key in ("CURRENT", "CHANGES", "HOURLY", "OUTLOOK"):
+                    if key in sections:
+                        narrative.append(f"{key}\n", "bold cyan")
+                        narrative.append(sections[key].strip() + "\n\n", "white")
+                console.print(Panel(narrative, title=f"[bold]🤖 {AGENT_MODEL}[/bold]", border_style="green", box=panel_box, padding=(0, 1)))
+            else:
+                sec_table = Table.grid(padding=(0, 1 if compact else 2))
+                sec_table.add_column(style="bold cyan", min_width=10)
+                sec_table.add_column(style="white")
+                for key in ("CURRENT", "CHANGES", "HOURLY", "OUTLOOK"):
+                    if key in sections:
+                        sec_table.add_row(key, sections[key].strip())
+                console.print(Panel(sec_table, title=f"[bold]🤖 {AGENT_MODEL}[/bold]", border_style="green", box=panel_box, padding=(0, 1 if compact else 2)))
         else:
-            console.print(Panel(Text(answer, "white"), title=f"[bold]🤖 {AGENT_MODEL}[/bold]", border_style="green", box=box.ROUNDED))
+            console.print(Panel(Text(answer, "white"), title=f"[bold]🤖 {AGENT_MODEL}[/bold]", border_style="green", box=panel_box, padding=(0, 1 if compact else 2)))
 
 # ══════════════════════════════════════════════════════════════════════
 #  Main pipeline

@@ -1,19 +1,26 @@
+import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+def run_cli(*args: str, columns: Optional[int] = None) -> subprocess.CompletedProcess[str]:
+    env = None
+    if columns is not None:
+        env = dict(os.environ)
+        env["COLUMNS"] = str(columns)
     return subprocess.run(
         [sys.executable, *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -29,14 +36,14 @@ class CliSmokeTests(unittest.TestCase):
         self.assertIn("knowledge_query", proc.stdout)
 
     def test_fs_manager_runs(self) -> None:
-        proc = run_cli("src/modules/fs_manager.py", ".", "--harness")
+        proc = run_cli("src/modules/fs_manager.py", ".", "--harness", columns=72)
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("Repository Structure", proc.stdout)
+        self.assertIn("ROOT: ElfWeave", proc.stdout)
 
     def test_knowledge_agent_query_runs(self) -> None:
-        proc = run_cli("src/modules/knowledge_agent.py", "--query", "harness", "--harness")
+        proc = run_cli("src/modules/knowledge_agent.py", "--query", "harness", "--harness", columns=72)
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("File:", proc.stdout)
+        self.assertIn("score:", proc.stdout)
 
     def test_browser_agent_help_runs(self) -> None:
         proc = run_cli("src/modules/browser_agent.py", "--help")

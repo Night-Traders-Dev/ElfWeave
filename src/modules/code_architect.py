@@ -48,7 +48,6 @@ async def run(filenames: List[str], harness: bool = False) -> int:
             ui.add_step("fatal error").error(str(exc)); refresh()
             return 1
 
-    ui.print_card("Architectural Audit", "Detailed report below...", border_color="cyan", padding=(0,1) if harness else (1,2))
     print_audit_card(console, analysis, harness=harness)
     return 0
 

@@ -9,7 +9,8 @@ Specifically optimized for hardware with **8GB VRAM (RTX 5060)** and 32GB RAM, u
 - **Evolutionary Self-Repair**: Agents detect their own logic/syntax errors, call a self-analysis tool, and autonomously apply code patches using the `repair_code` engine.
 - **Web-Learning Loop**: When an agent encounters an unfamiliar error, it proactively "Googles" the documentation via the `research_fix` specialist to learn the correct recovery strategy.
 - **Persistent Experience Store**: Long-term memory at `~/.agent_experience.jsonl` tracks every success and failure, allowing the orchestrator to "remember" and avoid past mistakes.
-- **Standardized "Claude Code" UI**: A premium, terminal-native dashboard with **synchronized 10Hz animation frames** and responsive, fluid layout cards.
+- **Responsive Terminal UI**: Shared live status, cards, and summaries now adapt to narrow and wide terminals so agents stay readable from compact shells to full-screen panes.
+- **Consistent Harness Output**: Specialist agents emit concise harness-mode summaries so the orchestrator shows one clean result card instead of nested dashboards.
 - **Hardware-Aware Tuning**: Optimized for local environment using **qwen2.5:7b** for planning and **llama3.1:8b** for high-fidelity code generation and validation.
 
 ## 🛠 Project Structure
@@ -45,6 +46,13 @@ ElfWeave implements a "Closed-Loop" evolutionary lifecycle:
 4. **Autonomous Repair**: The `repair_code` tool applies an LLM-generated patch to the module's source code on disk.
 5. **Memory Retrieval**: The Planner consults past lessons from the Experience Store to avoid regressions.
 
+## 🖥 UI Behavior
+
+- **Full mode**: standalone agents render richer tables and panels when there is enough terminal width.
+- **Compact mode**: tables shed lower-value columns before they overflow.
+- **Harness mode**: specialists return plain, width-conscious summaries so the top-level harness owns the final presentation.
+- **Shared chrome**: step rows, cards, and validation blocks all use the same responsive sizing rules from `src/common/ui.py`.
+
 ## 🤖 Agent Roster & Examples
 
 | Agent | Capability | Example Command |
@@ -63,8 +71,16 @@ ElfWeave implements a "Closed-Loop" evolutionary lifecycle:
 2. **Setup Ollama**: Ensure `ollama` is running with `llama3.1:8b` and `qwen2.5:7b` pulled.
 3. **Run a Mission**:
    ```bash
-   uv run --with browser-use --with ollama python src/harness.py "Show me the project structure"
+   uv run --with browser-use --with ollama python main.py "Show me the project structure"
    ```
+
+## ✅ Verification
+
+Run the smoke and responsive-layout checks with:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ---
 *Created by the Night-Traders-Dev team.*
