@@ -112,11 +112,13 @@ PLANNER_SYSTEM = dedent("""\
          over raw utilities (http_get, shell) for their respective domains.
       3. Minimal Hallucination: Do NOT invent arguments, URLs, or paths.
       4. Signature Audit: Carefully match your "args" to the parameters in the catalogue.
-      5. Self-Correction & Repair: If a previous attempt failed due to a CODE ERROR (e.g., NameError, 
-         SyntaxError), use `analyze_failure` and then `repair_code` before retrying the task.
-      6. To pass a prior step's output as an arg value, use the string "{step_N}"
+      5. Research-First: If a tool fails with a technical error you don't recognize, 
+         call `analyze_failure` and then `research_fix` to learn the solution from the web.
+      6. Self-Healing: Use `repair_code` ONLY after identifying a specific fix (via research 
+         or analysis) before retrying the task.
+      7. To pass a prior step's output as an arg value, use the string "{step_N}"
          where N is the 0-based index of the prior step (e.g. "{step_0}").
-      7. Respond with ONLY a JSON object — no markdown, no prose.
+      8. Respond with ONLY a JSON object — no markdown, no prose.
 
     {
       "rationale": "why this plan works",
@@ -461,13 +463,16 @@ async def tool_analyze_failure(issues: str, plan_context: str, ui: UIState, refr
     res, _ = await _chat_json(
         client,
         PLANNER_MODEL,
-        "You are an expert systems debugger. Perform a technical root-cause analysis. Use Chain-of-Thought for the 'cause' field. Return JSON: { \"cause\": \"...\", \"fix\": \"...\" }",
+        "You are an expert systems debugger. Perform a technical root-cause analysis. Use Chain-of-Thought for the 'cause' field. Return JSON: { \"cause\": \"...\", \"fix\": \"...\", \"needs_research\": boolean }",
         prompt,
         ui,
         refresh,
         "analyzer"
     )
-    return f"Cause Analysis: {res.get('cause')}\nRecommended Fix: {res.get('fix')}\nTarget File: {relevant_files[0].name if relevant_files else 'unknown'}"
+    analysis = f"Cause Analysis: {res.get('cause')}\nRecommended Fix: {res.get('fix')}\nTarget File: {relevant_files[0].name if relevant_files else 'unknown'}"
+    if res.get("needs_research"):
+        analysis += "\nSTATUS: Ambiguous error. SUGGESTION: Call `research_fix` to confirm correct API usage."
+    return analysis
 
 
 @register_tool("repair_code", "Maintenance tool — autonomously apply a code fix to a specific file. Use this when analyze_failure reveals a technical bug.")
@@ -506,6 +511,13 @@ async def tool_repair_code(filename: str, recommended_fix: str, ui: UIState, ref
     await asyncio.to_thread(target.write_text, updated.strip())
     s_rep.done("file patched successfully"); refresh()
     return f"Successfully repaired {target.name}. The fix has been applied to disk."
+
+
+@register_tool("research_fix", "Technical Web Research — use a browser to learn the correct way to fix a specific error message or library traceback.")
+async def tool_research_fix(issues: str, ui: UIState, refresh: Callable) -> str:
+    search_query = f"Search web: How to fix this Python error: {issues[:200].strip()}. Find the correct documentation or best practice."
+    # We call the browser specialist directly to perform the research
+    return await tool_browser(search_query, ui, refresh)
 
 # ══════════════════════════════════════════════════════════════════════
 #  Data models
