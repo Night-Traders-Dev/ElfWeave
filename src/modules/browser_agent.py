@@ -35,7 +35,6 @@ UI_REFRESH_HZ   = 10
 # ══════════════════════════════════════════════════════════════════════
 #  Main pipeline
 # ══════════════════════════════════════════════════════════════════════
-
 async def run(query: str, model: str, harness: bool = False) -> int:
     ui      = UIState(agent_name="browser-agent", model_info=f"{model}")
     if harness: ui.harness_mode = True
@@ -44,26 +43,26 @@ async def run(query: str, model: str, harness: bool = False) -> int:
         def refresh() -> None:
             ui.refresh()
 
-    try:
-        s_init = ui.add_step("connect + warmup").start(); refresh()
-        # Ensure we have the model (and pull it if needed)
-        _ = await setup_ollama(OLLAMA_URL, [model])
-        s_init.done("Ollama ready · model verified"); refresh()
-        
-        # ── Load Domain Knowledge ──
-        expert_manual = ""
         try:
-            from src.modules.knowledge_logic import get_logic
-            logic = get_logic()
-            if logic.load():
-                results = logic.query("browser navigator protocol stealth extraction")
-                expert_manual = "\n".join(r.get("text", "") for r in results)
-        except Exception:
-            pass
+            s_init = ui.add_step("connect + warmup").start(); refresh()
+            # Ensure we have the model (and pull it if needed)
+            _ = await setup_ollama(OLLAMA_URL, [model])
+            s_init.done("Ollama ready · model verified"); refresh()
             
-        final_task = query
-        if expert_manual:
-            final_task = f"ADHERE TO THESE PROTOCOLS:\n{expert_manual}\n\nTASK:\n{query}"
+            # ── Load Domain Knowledge ──
+            expert_manual = ""
+            try:
+                from src.modules.knowledge_logic import get_logic
+                logic = get_logic()
+                if logic.load():
+                    results = logic.query("browser navigator protocol stealth extraction")
+                    expert_manual = "\n".join(r.get("text", "") for r in results)
+            except Exception:
+                pass
+                
+            final_task = query
+            if expert_manual:
+                final_task = f"ADHERE TO THESE PROTOCOLS:\n{expert_manual}\n\nTASK:\n{query}"
 
             result = await execute_browser_task(final_task, model, OLLAMA_URL, ui, refresh, harness=harness)
             

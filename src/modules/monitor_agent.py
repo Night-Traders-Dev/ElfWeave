@@ -32,7 +32,7 @@ from .monitor_logic import tail_file, classify_log_line
 # ══════════════════════════════════════════════════════════════════════
 
 OLLAMA_URL      = "http://localhost:11434"
-MONITOR_MODEL   = "llama3.2:1b"
+MONITOR_MODEL   = "llama3.1:8b"
 UI_REFRESH_HZ   = 10
 
 # ══════════════════════════════════════════════════════════════════════

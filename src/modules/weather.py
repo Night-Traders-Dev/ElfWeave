@@ -308,96 +308,99 @@ async def run(query: str, image_path: Optional[str] = None, harness: bool = Fals
         def refresh() -> None:
             ui.refresh()
 
-    try:
-        s_init = ui.add_step("connect + warmup").start(); refresh()
-        client = await setup_ollama(OLLAMA_URL, [AGENT_MODEL, CHECKER_MODEL])
-        
-        # Parallel warmup using asyncio.gather
-        await asyncio.gather(
-            _warmup(client, AGENT_MODEL),
-            _warmup(client, CHECKER_MODEL)
-        )
-        
-        # ── Load Domain Knowledge ──
         try:
-            from src.modules.knowledge_logic import get_logic
-            logic = get_logic()
-            # logic.load is sync but fast, could be to_thread if slow
-            if logic.load():
-                results = logic.query("weather protocol visual assessment coordinates")
-                expert_manual = "\n".join(r.get("text", "") for r in results)
-        except Exception:
-            pass # Graceful fallback if knowledge logic or index missing
+            s_init = ui.add_step("connect + warmup").start(); refresh()
+            client = await setup_ollama(OLLAMA_URL, [AGENT_MODEL, CHECKER_MODEL])
             
-        s_init.done("Ollama ready · models warmed"); refresh()
+            # Parallel warmup using asyncio.gather
+            await asyncio.gather(
+                _warmup(client, AGENT_MODEL),
+                _warmup(client, CHECKER_MODEL)
+            )
+            
+            # ── Load Domain Knowledge ──
+            try:
+                from src.modules.knowledge_logic import get_logic
+                logic = get_logic()
+                if logic.load():
+                    results = logic.query("weather protocol visual assessment coordinates")
+                    expert_manual = "\n".join(r.get("text", "") for r in results)
+            except Exception:
+                pass
+                
+            s_init.done("Ollama ready · models warmed"); refresh()
 
-        loc_hint = extract_location(query) or query.strip().rstrip(" ?.")
-        s_cls  = ui.add_step("classify query").start(); refresh()
-        s_geo  = ui.add_step("geocode").start();        refresh()
+            loc_hint = extract_location(query) or query.strip().rstrip(" ?.")
+            s_cls  = ui.add_step("classify query").start(); refresh()
+            s_geo  = ui.add_step("geocode").start();        refresh()
 
-        # Execute classification (async) and geocoding (threaded sync) in parallel
-        f_cls_task = _chat_json(client, CHECKER_MODEL, CLASSIFIER_SYSTEM, f"Classify: {query!r}", ui, refresh, "classify")
-        f_geo_task = asyncio.to_thread(geocode, loc_hint)
-        
-        pc_raw, pc_usage = await f_cls_task
-        coords = await f_geo_task
+            f_cls_task = _chat_json(client, CHECKER_MODEL, CLASSIFIER_SYSTEM, f"Classify: {query!r}", ui, refresh, "classify")
+            f_geo_task = asyncio.to_thread(geocode, loc_hint)
+            
+            pc_raw, pc_usage = await f_cls_task
+            coords = await f_geo_task
 
-        is_weather = bool(pc_raw.get("is_weather_query", False))
-        location   = str(pc_raw.get("location", "")).strip() or loc_hint
-        s_cls.done(f"{'✓ weather' if is_weather else '✗ not weather'} ({pc_raw.get('confidence',0):.0%})")
-        s_geo.done(f"{coords[0]:.4f}°N, {coords[1]:.4f}°W" if coords else "geocode failed", cached=(location.lower() in {})) # cache check simplified
-        refresh()
+            is_weather = bool(pc_raw.get("is_weather_query", False))
+            location   = str(pc_raw.get("location", "")).strip() or loc_hint
+            s_cls.done(f"{'✓ weather' if is_weather else '✗ not weather'} ({pc_raw.get('confidence',0):.0%})")
+            s_geo.done(f"{coords[0]:.4f}°N, {coords[1]:.4f}°W" if coords else "geocode failed")
+            refresh()
 
-        if not is_weather:
-            ui.push_chunk("This doesn't appear to be a weather query.\n" + str(pc_raw.get("reason", "")))
-            ui.running = False; refresh(); return 1
+            if not is_weather:
+                ui.push_chunk("This doesn't appear to be a weather query.\n" + str(pc_raw.get("reason", "")))
+                return 1
 
-        s_wx  = ui.add_step("fetch weather").start();  refresh()
-        s_mem = ui.add_step("load memory").start();    refresh()
+            s_wx  = ui.add_step("fetch weather").start();  refresh()
+            s_mem = ui.add_step("load memory").start();    refresh()
 
-        f_wx_task = asyncio.to_thread(fetch_weather, location, coords)
-        f_mem_task = asyncio.to_thread(load_memory)
-        
-        report = await f_wx_task
-        snapshots = await f_mem_task
+            f_wx_task = asyncio.to_thread(fetch_weather, location, coords)
+            f_mem_task = asyncio.to_thread(load_memory)
+            
+            report = await f_wx_task
+            snapshots = await f_mem_task
 
-        s_wx.done(f"{report.desc} · {report.temp_f}°F")
-        prev_snap = find_prev_snapshot(report, snapshots)
-        comp      = compare(prev_snap, report)
-        s_mem.done(f"vs {comp.previous_date}" if comp.found else "no prior data"); refresh()
+            s_wx.done(f"{report.desc} · {report.temp_f}°F")
+            prev_snap = find_prev_snapshot(report, snapshots)
+            comp      = compare(prev_snap, report)
+            s_mem.done(f"vs {comp.previous_date}" if comp.found else "no prior data"); refresh()
 
-        if image_path:
-            img = Path(image_path).expanduser()
-            if img.exists():
-                s_vis = ui.add_step("vision analysis").start(); refresh()
-                vision_note, _ = await _stream_chat(client, AGENT_MODEL, [{"role": "user", "content": f"Analyse context: {report.desc}", "images": [str(img)]}], ui, refresh, phase="vision")
-                s_vis.done(vision_note[:60]); refresh()
+            if image_path:
+                img = Path(image_path).expanduser()
+                if img.exists():
+                    s_vis = ui.add_step("vision analysis").start(); refresh()
+                    vision_note, _ = await _stream_chat(client, AGENT_MODEL, [{"role": "user", "content": f"Analyse context: {report.desc}", "images": [str(img)]}], ui, refresh, phase="vision")
+                    s_vis.done(vision_note[:60]); refresh()
 
-        s_ans = ui.add_step("generate answer").start(); refresh()
-        ctx   = build_context(query, report, comp, vision_note)
-        sys_prompt = AGENT_SYSTEM
-        if expert_manual:
-            sys_prompt = f"EXPERT MANUAL:\n{expert_manual}\n\n{AGENT_SYSTEM}"
+            s_ans = ui.add_step("generate answer").start(); refresh()
+            ctx   = build_context(query, report, comp, vision_note)
+            sys_prompt = AGENT_SYSTEM
+            if expert_manual:
+                sys_prompt = f"EXPERT MANUAL:\n{expert_manual}\n\n{AGENT_SYSTEM}"
 
-        answer, _ = await _stream_chat(client, AGENT_MODEL, 
-                                 [{"role": "system", "content": sys_prompt},
-                                  {"role": "user", "content": f"Query: {query}\n\n{ctx}"}],
-                                 ui, refresh, phase="answer")
-        s_ans.done(answer[:60]); refresh()
+            answer, _ = await _stream_chat(client, AGENT_MODEL, 
+                                     [{"role": "system", "content": sys_prompt},
+                                      {"role": "user", "content": f"Query: {query}\n\n{ctx}"}],
+                                     ui, refresh, phase="answer")
+            s_ans.done(answer[:60]); refresh()
 
-        s_val = ui.add_step("validate result").start(); refresh()
-        res, _ = await _chat_json(client, CHECKER_MODEL, RESULT_CHECK_SYSTEM, f"Query: {query}\nAnswer: {answer}", ui, refresh, "validate")
-        s_val.done(f"valid={res.get('is_valid', True)} score={res.get('quality_score', 1):.0%}"); refresh()
+            s_val = ui.add_step("validate result").start(); refresh()
+            res, _ = await _chat_json(client, CHECKER_MODEL, RESULT_CHECK_SYSTEM, f"Query: {query}\nAnswer: {answer}", ui, refresh, "validate")
+            s_val.done(f"valid={res.get('is_valid', True)} score={res.get('quality_score', 1):.0%}"); refresh()
 
-        s_save = ui.add_step("save memory").start(); refresh()
-        snapshots = upsert_snapshot(snapshots, snapshot_from_report(report))
-        save_memory(snapshots)
-        s_save.done("memory updated"); refresh()
+            s_save = ui.add_step("save memory").start(); refresh()
+            snapshots = upsert_snapshot(snapshots, snapshot_from_report(report))
+            save_memory(snapshots)
+            s_save.done("memory updated"); refresh()
+
+        except Exception as exc:
+            ui.push_chunk(f"[error] {exc}")
+            return 1
 
     if report and comp:
         if not harness: ui.console.print()
         print_weather_card(ui.console, report, comp, prev_snap, answer, vision_note, harness=harness)
     return 0
+
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Multimodal weather agent")
