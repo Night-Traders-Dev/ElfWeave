@@ -110,7 +110,6 @@ class MegaKernelRuntime:
         try:
             self._decoder = module.Decoder(model_name=self.model_name, verbose=False)
         except ModuleNotFoundError as exc:
-            missing = exc.name or "dependency"
             raise RuntimeError(
                 "Megakernel dependencies are incomplete. "
                 "Install torch with CUDA support, then run "
