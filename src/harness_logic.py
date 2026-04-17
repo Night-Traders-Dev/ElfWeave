@@ -199,9 +199,19 @@ async def tool_research_fix(issues: str, ui: UIState, refresh: Callable) -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 def _resolve_args(args: dict, res_history: List[str]) -> dict:
+    def _sub(s: str) -> str:
+        return re.sub(
+            r"\{step_(\d+)\}",
+            lambda m: res_history[int(m.group(1))] if int(m.group(1)) < len(res_history) else "[error]",
+            s,
+        )
+
     res = {}
     for k, v in args.items():
-        if isinstance(v, str): v = re.sub(r"\{step_(\d+)\}", lambda m: res_history[int(m.group(1))] if int(m.group(1)) < len(res_history) else f"[error]", v)
+        if isinstance(v, str):
+            v = _sub(v)
+        elif isinstance(v, list):
+            v = [_sub(x) if isinstance(x, str) else x for x in v]
         res[k] = v
     return res
 
@@ -214,8 +224,12 @@ async def execute_plan(plan: List[PlanStep], ui: UIState, refresh: Callable, cli
         tool = _TOOL_REGISTRY[step.tool]
         out = await tool.call(_resolve_args(step.args, strings), ui, refresh, client)
         is_err = "[tool error]" in out
-        if is_err: s.error("error")
-        else: s.done("ok")
+        if is_err:
+            s.error("error")
+            # Prepend structured context so the validator/planner knows which step failed
+            out = f"[failed at step {i} · tool={step.tool!r}] {out}"
+        else:
+            s.done("ok")
         results.append(StepResult(step, out, is_err)); strings.append(out); refresh()
         if is_err: break
     return results

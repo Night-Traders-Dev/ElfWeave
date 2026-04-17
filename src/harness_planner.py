@@ -43,7 +43,7 @@ async def plan_task(client: AsyncClient, query: str, feedback: str, ui: UIState,
 
 async def analyze_failure_logic(issues: str, plan_context: str, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
     from src.harness_logic import get_tool_catalogue, get_learned_lessons
-    from src.harness import _root
+    _root = str(Path(__file__).resolve().parent.parent.parent)
     files = list(Path(_root).rglob("*.py"))
     code_context = ""
     relevant = [f for f in files if f.name in issues]
@@ -60,7 +60,7 @@ async def analyze_failure_logic(issues: str, plan_context: str, ui: UIState, ref
     return analysis
 
 async def repair_code_logic(filename: str, recommended_fix: str, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
-    from src.harness import _root
+    _root = str(Path(__file__).resolve().parent.parent.parent)
     files = list(Path(_root).rglob(filename))
     if not files: return f"[error] file not found: {filename}"
     target = files[0]
@@ -71,6 +71,11 @@ async def repair_code_logic(filename: str, recommended_fix: str, ui: UIState, re
     updated, _ = await _stream_chat(client, REVIEW_MODEL, [{"role": "user", "content": prompt}], ui, refresh, "repair")
     
     if not updated or len(updated) < 10: s.error("empty"); return "[error] repair failed"
-    await asyncio.to_thread(target.write_text, updated.strip())
+    # Strip markdown code fences that LLMs commonly wrap responses in
+    import re as _re
+    clean = _re.sub(r"^```[a-z]*\n?", "", updated.strip(), flags=_re.MULTILINE)
+    clean = _re.sub(r"\n?```$", "", clean.strip()).strip()
+    if not clean or len(clean) < 10: s.error("empty after fence-strip"); return "[error] repair produced no code"
+    await asyncio.to_thread(target.write_text, clean)
     s.done("patched"); refresh()
     return f"Successfully repaired {target.name}."

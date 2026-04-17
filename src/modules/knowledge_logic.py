@@ -86,12 +86,11 @@ class KnowledgeLogic:
         for i, idx in enumerate(indices[0]):
             if idx != -1:
                 meta = self.metadata[idx]
-                # Re-read the chunk from file or cache? For now, we store just meta.
-                # Actually, our metadata doesn't have the text. Let's fix that.
                 results.append({
                     "path": meta["path"],
                     "score": float(distances[0][i]),
-                    "chunk_id": meta["chunk"]
+                    "chunk_id": meta["chunk"],
+                    "text": meta.get("text", ""),
                 })
         return results
 

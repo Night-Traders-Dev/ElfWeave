@@ -117,6 +117,9 @@ def _save_geocache() -> None:
     )
 
 
+_load_geocache()  # Populate in-memory cache from disk on module load
+
+
 def geocode(location: str, timeout: int = 20) -> Optional[Tuple[float, float]]:
     key = location.lower().strip()
     with _geocache_lock:

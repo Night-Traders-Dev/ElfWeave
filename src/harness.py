@@ -63,7 +63,10 @@ async def run(query: str, dry_run: bool = False) -> int:
                 rationale = plan_raw.get("rationale", "")
                 s_plan.done(f"{len(plan)} steps"); refresh()
 
-                if dry_run: return 0
+                if dry_run:
+                    ui.add_step("save history").skip("dry-run — skipped")
+                    refresh()
+                    return 0
 
                 results = await execute_plan(plan, ui, refresh, client)
                 
