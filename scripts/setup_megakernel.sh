@@ -2,7 +2,19 @@
 # ElfWeave Megakernel Setup Script
 # This script installs and configures the Luce Megakernel for Qwen3.5-0.8B
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+else
+    echo "ERROR: python3 or python is required"
+    exit 1
+fi
 
 echo "═══════════════════════════════════════════════════════════"
 echo "  ElfWeave Megakernel Setup"
@@ -10,32 +22,36 @@ echo "════════════════════════�
 echo ""
 
 # Check for CUDA
-if ! python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+if ! "${PYTHON_BIN}" -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
     echo "❌ ERROR: CUDA is not available or torch was installed without CUDA support"
     echo ""
     echo "Please ensure:"
     echo "  1. You have an NVIDIA GPU with CUDA support"
     echo "  2. NVIDIA drivers are installed"
     echo "  3. PyTorch with CUDA is installed:"
-    echo "     pip install torch --index-url https://download.pytorch.org/whl/cu126"
+    echo "     ${PYTHON_BIN} -m pip install torch --index-url https://download.pytorch.org/whl/cu132"
     echo ""
     exit 1
 fi
 
 echo "✓ CUDA detected"
-python3 -c "import torch; print(f'  PyTorch {torch.__version__} with CUDA {torch.version.cuda}')"
-python3 -c "import torch; print(f'  GPU: {torch.cuda.get_device_name(0)}')"
+"${PYTHON_BIN}" -c "import torch; print(f'  PyTorch {torch.__version__} with CUDA {torch.version.cuda}')"
+"${PYTHON_BIN}" -c "import torch; print(f'  GPU: {torch.cuda.get_device_name(0)}')"
 echo ""
+
+if ! "${PYTHON_BIN}" -m pip --version >/dev/null 2>&1; then
+    echo "Bootstrapping pip for ${PYTHON_BIN}..."
+    "${PYTHON_BIN}" -m ensurepip --upgrade >/dev/null
+fi
 
 # Install dependencies
 echo "Installing dependencies..."
-pip install -q transformers accelerate
+"${PYTHON_BIN}" -m pip install -q -e "${REPO_ROOT}[megakernel]"
 
 # Build megakernel extension
 echo ""
 echo "Building megakernel CUDA extension..."
-cd "$(dirname "$0")/../third_party/luce-megakernel"
-pip install -e .
+"${PYTHON_BIN}" -m pip install --no-build-isolation -e "${REPO_ROOT}/third_party/luce-megakernel"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"
@@ -49,11 +65,11 @@ echo "  - Fallback: Ollama (qwen3.5:0.8b)"
 echo ""
 echo "Usage:"
 echo "  # Run with megakernel enabled:"
-echo "  python3 src/harness.py --use-kernel \"your task here\""
+echo "  ${PYTHON_BIN} src/harness.py --use-kernel \"your task here\""
 echo ""
 echo "  # Or set environment variable:"
 echo "  export ELFWEAVE_INFERENCE_BACKEND=hybrid"
-echo "  python3 src/harness.py \"your task here\""
+echo "  ${PYTHON_BIN} src/harness.py \"your task here\""
 echo ""
 echo "Model configuration:"
 echo "  - CHECKER_MODEL:  qwen3.5:0.8b (megakernel for sanity checks)"

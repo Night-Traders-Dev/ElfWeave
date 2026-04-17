@@ -53,6 +53,7 @@ class MegaKernelRuntime:
         self._lock = asyncio.Lock()
         self._module = None
         self._decoder = None
+        self._tokenizer = None
 
     @property
     def configured(self) -> bool:
@@ -61,8 +62,11 @@ class MegaKernelRuntime:
     def availability_reason_sync(self) -> str:
         if not self.configured:
             return f"megakernel repo is missing model.py at {self.repo_path}"
-        # Model name check removed - megakernel uses its internal Qwen3.5-0.8B weights
-        # regardless of the Ollama model name configured for fallback
+        if not self.supports_model(self.model_name):
+            return (
+                f"megakernel only supports {DEFAULT_MEGAKERNEL_MODEL}; "
+                f"got {self.model_name}"
+            )
 
         repo_str = str(self.repo_path)
         if repo_str not in sys.path:
@@ -100,12 +104,46 @@ class MegaKernelRuntime:
         self._module = module
         return module
 
+    @staticmethod
+    def _normalize_model_name(model: str) -> str:
+        return str(model or "").strip().lower()
+
+    def supports_model(self, requested_model: str) -> bool:
+        normalized = self._normalize_model_name(requested_model)
+        if not normalized:
+            return True
+        compatible_names = {
+            self._normalize_model_name(self.model_name),
+            self._normalize_model_name(DEFAULT_MEGAKERNEL_MODEL),
+            self._normalize_model_name("qwen3.5:0.8b"),
+            self._normalize_model_name("qwen/qwen3.5-0.8b"),
+        }
+        return normalized in compatible_names
+
+    def _load_tokenizer_sync(self):
+        if self._tokenizer is not None:
+            return self._tokenizer
+        if self._decoder is not None:
+            tokenizer = getattr(self._decoder, "tokenizer", None)
+            if tokenizer is not None:
+                self._tokenizer = tokenizer
+                return tokenizer
+        if importlib.util.find_spec("transformers") is None:
+            raise RuntimeError("transformers is not installed in the active environment")
+        from transformers import AutoTokenizer
+
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        return self._tokenizer
+
     def _ensure_ready_sync(self):
         if self._decoder is not None:
             return self._decoder
         module = self._load_module_sync()
         try:
             self._decoder = module.Decoder(model_name=self.model_name, verbose=False)
+            tokenizer = getattr(self._decoder, "tokenizer", None)
+            if tokenizer is not None:
+                self._tokenizer = tokenizer
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "Megakernel dependencies are incomplete. "
@@ -119,14 +157,15 @@ class MegaKernelRuntime:
 
     def supports_request(
         self,
+        model: str,
         messages: List[Dict[str, Any]],
         options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, str]:
-        # Model name check removed - megakernel always uses Qwen3.5-0.8B internally
-
         options = options or {}
+        if not self.supports_model(model):
+            return False, f"megakernel only supports {DEFAULT_MEGAKERNEL_MODEL}"
         max_tokens = int(options.get("num_predict") or options.get("max_tokens") or self.max_tokens)
-        prompt_tokens = sum(_rough_token_estimate(str(message.get("content", ""))) for message in messages)
+        prompt_tokens = self._prompt_token_count_sync(messages)
         safety_margin = 64
         if prompt_tokens + max_tokens + safety_margin > self.max_context_tokens:
             return False, "prompt exceeds Luce Megakernel context budget"
@@ -137,8 +176,7 @@ class MegaKernelRuntime:
             await asyncio.to_thread(self._ensure_ready_sync)
 
     def _messages_to_prompt_sync(self, messages: List[Dict[str, Any]]) -> str:
-        decoder = self._ensure_ready_sync()
-        tokenizer = getattr(decoder, "tokenizer", None)
+        tokenizer = self._load_tokenizer_sync()
         if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
             try:
                 return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -152,18 +190,41 @@ class MegaKernelRuntime:
         parts.append("ASSISTANT:\n")
         return "\n\n".join(parts)
 
-    def _generate_sync(self, messages: List[Dict[str, Any]], max_tokens: int) -> str:
-        decoder = self._ensure_ready_sync()
+    def _prompt_token_count_sync(self, messages: List[Dict[str, Any]]) -> int:
+        tokenizer = self._load_tokenizer_sync()
+        if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+            try:
+                token_ids = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                )
+                return len(token_ids)
+            except Exception:
+                pass
+
         prompt = self._messages_to_prompt_sync(messages)
-        return decoder.generate(prompt, max_tokens=max_tokens)
+        return len(tokenizer.encode(prompt, add_special_tokens=True))
+
+    def _generate_sync(self, messages: List[Dict[str, Any]], max_tokens: int) -> Tuple[str, int]:
+        decoder = self._ensure_ready_sync()
+        prompt_tokens = self._prompt_token_count_sync(messages)
+        if prompt_tokens + max_tokens + 64 > self.max_context_tokens:
+            raise ValueError("prompt exceeds Luce Megakernel context budget")
+        prompt = self._messages_to_prompt_sync(messages)
+        return decoder.generate(prompt, max_tokens=max_tokens), prompt_tokens
 
     async def chat(self, model: str, messages: List[Dict[str, Any]], stream: bool = True, options: Optional[Dict[str, Any]] = None):
         options = options or {}
+        if not self.supports_model(model):
+            raise ValueError(
+                f"megakernel only supports {DEFAULT_MEGAKERNEL_MODEL}; "
+                f"got {model}"
+            )
         max_tokens = int(options.get("num_predict") or options.get("max_tokens") or self.max_tokens)
-        prompt_tokens = sum(_est_tokens(str(m.get("content", ""))) for m in messages)
         async with self._lock:
             started = time.perf_counter()
-            text = await asyncio.to_thread(self._generate_sync, messages, max_tokens)
+            text, prompt_tokens = await asyncio.to_thread(self._generate_sync, messages, max_tokens)
             duration_ms = (time.perf_counter() - started) * 1000
 
         completion_tokens = _est_tokens(text)
@@ -224,6 +285,7 @@ class InferenceClient:
     def _can_use_megakernel(
         self,
         phase: str,
+        model: str,
         messages: List[Dict[str, Any]],
         options: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -237,7 +299,7 @@ class InferenceClient:
             if not isinstance(message.get("content", ""), str):
                 return False
         if hasattr(self.megakernel, "supports_request"):
-            allowed, _reason = self.megakernel.supports_request(messages, options=options)
+            allowed, _reason = self.megakernel.supports_request(model=model, messages=messages, options=options)
             if not allowed:
                 return False
         return True
@@ -263,7 +325,7 @@ class InferenceClient:
         options: Optional[Dict[str, Any]] = None,
     ):
         phase = phase.strip().lower()
-        if self._can_use_megakernel(phase, messages, options=options):
+        if self._can_use_megakernel(phase, model, messages, options=options):
             try:
                 return await self.megakernel.chat(model=model, messages=messages, stream=stream, options=options)
             except Exception:

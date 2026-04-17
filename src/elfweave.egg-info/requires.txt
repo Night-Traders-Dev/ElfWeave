@@ -1,0 +1,17 @@
+langchain-ollama
+numpy
+ollama
+rich
+timezonefinder
+
+[browser]
+browser-use
+langchain-ollama
+
+[knowledge]
+faiss-cpu
+sentence-transformers
+
+[megakernel]
+accelerate
+transformers

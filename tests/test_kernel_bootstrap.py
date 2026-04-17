@@ -32,13 +32,14 @@ class KernelBootstrapTests(unittest.TestCase):
 
     def test_existing_megakernel_overrides_are_preserved(self) -> None:
         env = {
+            "ELFWEAVE_INFERENCE_BACKEND": "megakernel",
             "ELFWEAVE_MEGAKERNEL_REPO": "/tmp/custom-kernel",
             "ELFWEAVE_MEGAKERNEL_MODEL": "custom/model",
             "ELFWEAVE_MEGAKERNEL_PHASES": "planner",
         }
         apply_kernel_env(True, environ=env, repo_root=REPO_ROOT)
 
-        self.assertEqual(env["ELFWEAVE_INFERENCE_BACKEND"], "hybrid")
+        self.assertEqual(env["ELFWEAVE_INFERENCE_BACKEND"], "megakernel")
         self.assertEqual(env["ELFWEAVE_MEGAKERNEL_REPO"], "/tmp/custom-kernel")
         self.assertEqual(env["ELFWEAVE_MEGAKERNEL_MODEL"], "custom/model")
         self.assertEqual(env["ELFWEAVE_MEGAKERNEL_PHASES"], "planner")

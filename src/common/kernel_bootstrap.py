@@ -34,7 +34,7 @@ def apply_kernel_env(
         return False
 
     env = os.environ if environ is None else environ
-    env["ELFWEAVE_INFERENCE_BACKEND"] = "hybrid"
+    env.setdefault("ELFWEAVE_INFERENCE_BACKEND", "hybrid")
     env.setdefault("ELFWEAVE_MEGAKERNEL_ENABLE", "1")
 
     repo_path = bundled_megakernel_repo(repo_root)
