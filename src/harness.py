@@ -110,11 +110,10 @@ PLANNER_SYSTEM = dedent("""\
       1. Use only tools listed in the catalogue.
       2. Specialist Priority: ALWAYS prefer specialized agents (weather, browser, knowledge_query) 
          over raw utilities (http_get, shell) for their respective domains.
-      3. Minimal Hallucination: Do NOT invent arguments, URLs, or paths. Use only values 
-         provided in the query, catalogue signatures, or prior step outputs.
+      3. Minimal Hallucination: Do NOT invent arguments, URLs, or paths.
       4. Signature Audit: Carefully match your "args" to the parameters in the catalogue.
-      5. Self-Correction: If a previous attempt failed, identify why (hallucinated arg? 
-         missing tool?) and adjust your plan accordingly.
+      5. Self-Correction & Repair: If a previous attempt failed due to a CODE ERROR (e.g., NameError, 
+         SyntaxError), use `analyze_failure` and then `repair_code` before retrying the task.
       6. To pass a prior step's output as an arg value, use the string "{step_N}"
          where N is the 0-based index of the prior step (e.g. "{step_0}").
       7. Respond with ONLY a JSON object — no markdown, no prose.
@@ -468,7 +467,45 @@ async def tool_analyze_failure(issues: str, plan_context: str, ui: UIState, refr
         refresh,
         "analyzer"
     )
-    return f"Cause Analysis: {res.get('cause')}\nRecommended Fix: {res.get('fix')}"
+    return f"Cause Analysis: {res.get('cause')}\nRecommended Fix: {res.get('fix')}\nTarget File: {relevant_files[0].name if relevant_files else 'unknown'}"
+
+
+@register_tool("repair_code", "Maintenance tool — autonomously apply a code fix to a specific file. Use this when analyze_failure reveals a technical bug.")
+async def tool_repair_code(filename: str, recommended_fix: str, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
+    # 1. Locate file
+    files = list(Path(_root).rglob(filename))
+    if not files: return f"[error] could not find file: {filename}"
+    target = files[0]
+    
+    # 2. Read context
+    content = await asyncio.to_thread(target.read_text, errors="replace")
+    
+    # 3. Prompt for full-file rewrite (for small files) or Search/Replace
+    # Given we are in a high-quality ecosystem, we'll ask for full content if < 10KB
+    prompt = (
+        f"FILE: {target.name}\n"
+        f"CURRENT CONTENT:\n---\n{content}\n---\n"
+        f"RECOMMENDED FIX:\n{recommended_fix}\n\n"
+        "REWRITE THE ENTIRE FILE with the fix applied. Match all existing patterns and imports. "
+        "Return ONLY the updated file content — no explanation, no markdown backticks."
+    )
+    
+    s_rep = ui.add_step(f"patching {target.name}").start(); refresh()
+    updated, _ = await _stream_chat(
+        client,
+        REVIEW_MODEL, # Use Llama 3.1:8b for better code quality
+        [{"role": "user", "content": prompt}],
+        ui, refresh, "repair"
+    )
+    
+    if not updated or len(updated) < 10:
+        s_rep.error("repair generated empty content"); refresh()
+        return "[error] repair failed - empty response from LLM"
+        
+    # 4. Write back
+    await asyncio.to_thread(target.write_text, updated.strip())
+    s_rep.done("file patched successfully"); refresh()
+    return f"Successfully repaired {target.name}. The fix has been applied to disk."
 
 # ══════════════════════════════════════════════════════════════════════
 #  Data models
