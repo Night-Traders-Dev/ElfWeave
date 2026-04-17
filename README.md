@@ -5,10 +5,11 @@ ElfWeave is a high-performance, modular multi-agent platform designed for local 
 ## 🚀 Key Features
 
 - **Standardized "Claude Code" UI**: A premium, terminal-native dashboard with **synchronized 10Hz animation frames** and unified result cards across all agents.
+- **Fully Responsive Design**: Dynamic UI sizing that adapts fluidly to your terminal width using Rich-based rules and ratio-mapped tables.
 - **Asynchronous Orchestration**: Fully `asyncio`-powered TUI with live token streaming and non-blocking sub-agent logs.
-- **Specialist-First Routing**: Intelligent tool selection that prioritizes high-level agents (Weather, Browser, Knowledge) over raw utilities to prevent hallucinations.
-- **Self-Improvement Loop**: Autonomous retry mechanism with LLM-based failure analysis and episodic memory.
-- **Hardware-Aware Tuning**: Tiered model approach (**qwen2.5:7b** for reasoning vs. **llama3.2:3b** for validation) with dynamic context window management.
+- **Specialist-First Routing**: Intelligent tool selection that prioritizes specialized agents (Weather, Browser, Knowledge) over raw utilities to prevent hallucinations.
+- **Subprocess Robustness**: Integrated `stderr` capture and Python traceback visibility, ensuring that agent crashes are reported with full technical context.
+- **Hardware-Aware Tuning**: Optimized for your local environment using **qwen2.5:7b** for planning and **llama3.1:8b** for validation and specialist assistance.
 
 ## 🛠 Project Structure
 
@@ -17,8 +18,8 @@ src/
 ├── harness.py          # Central Orchestrator & Planner (qwen2.5:7b)
 ├── common/
 │   ├── config.py       # Hardware & VRAM optimizations
-│   ├── ollama.py       # Async LLM helpers & streaming
-│   └── ui.py           # Synchronized TUI lifecycle manager
+│   ├── ollama.py       # Async LLM helpers & robust JSON parsing
+│   └── ui.py           # Synchronized, Responsive TUI manager
 └── modules/
     ├── browser_agent    # Autonomous web navigation
     ├── weather          # Multimodal weather analysis
@@ -32,21 +33,21 @@ To minimize hallucination (e.g., LLMs inventing URLs for `http_get`), ElfWeave e
 1. **Domain Specialists**: High-level modules like `weather` or `browser` are authoritative for their domains.
 2. **General Utilities**: Tools like `http_get` or `shell` are only used when no specialist exists or when a specific URL/command is grounded in previous output.
 
-## 📈 Self-Improvement & Memory
+## 📈 Validation & Self-Refinement
 
-ElfWeave doesn't just fail; it learns.
-1. **Validation Audit**: The Reviewer model (`llama3.2:3b`) scores every output. If it falls below 70%, a retry is triggered.
-2. **Failure Analysis**: The `analyze_failure` tool examines the orchestrator code and logs to suggest a specific fix for the next retry.
+ElfWeave doesn't just fail; it analyzes and adapts.
+1. **Validation Audit**: The Reviewer model (**llama3.1:8b**) scores every output. If it falls below 70%, a retry is triggered.
+2. **Crash Visibility**: If an agent module fails (Exit Code 1), the harness captures the full **Python traceback** and presents it to the planner for autonomous debugging.
 3. **Episodic Memory**: Past execution results are stored in `.harness_history.json` and injected into the Planner's context to avoid repeating past mistakes.
 
 ## 🤖 Agent Roster
 
-| Agent | Domain | Technology |
-| :--- | :--- | :--- |
-| **Browser** | Web Research | `browser-use`, `Playwright` |
-| **Weather** | Meteorology | `wttr.in`, `vision-llm` |
-| **Knowledge** | Local RAG | `FAISS`, `MiniLM` |
-| **Monitor** | Anomaly Detection | `asyncio`, `Ollama` |
+| Agent | Domain | Model (Local) | Technology |
+| :--- | :--- | :--- | :--- |
+| **Browser** | Web Research | `qwen2.5:7b` | `browser-use`, `Playwright` |
+| **Weather** | Meteorology | `llama3.1:8b` | `wttr.in`, `vision-llm` |
+| **Knowledge** | Local RAG | `Local Embed` | `FAISS`, `MiniLM` |
+| **Monitor** | Anomaly Detection | `llama3.1:8b` | `asyncio`, `Ollama` |
 
 ---
 *Created by the Night-Traders-Dev team.*
