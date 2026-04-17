@@ -431,6 +431,26 @@ async def tool_knowledge_query(query: str, ui: UIState, refresh: Callable) -> st
     ], ui, refresh)
 
 
+@register_tool("code_architect", "Expert design review — audit multiple source files for technical debt, modularity, and architectural patterns.")
+async def tool_code_architect(files: list[str], ui: UIState, refresh: Callable) -> str:
+    agent_path = Path(__file__).parent / "modules" / "code_architect.py"
+    return await _run_tool_subprocess([
+        "uv", "run",
+        "--with", "ollama",
+        "--with", "rich",
+        "python", str(agent_path),
+        *files,
+        "--harness",
+    ], ui, refresh)
+
+
+@register_tool("fs_manager", "Project explorer — generate repository trees, scan for file patterns, and analyze directory-scale metadata.")
+async def tool_fs_manager(path: str = ".", ui: UIState, refresh: Callable) -> str:
+    agent_path = Path(__file__).parent / "modules" / "fs_manager.py"
+    args = ["uv", "run", "--with", "rich", "python", str(agent_path), path, "--harness"]
+    return await _run_tool_subprocess(args, ui, refresh)
+
+
 @register_tool("analyze_failure", "Root-cause diagnosis — analyze why a plan failed by comparing logs against the codebase and tool signatures.")
 async def tool_analyze_failure(issues: str, plan_context: str, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
     # Target files for self-analysis
