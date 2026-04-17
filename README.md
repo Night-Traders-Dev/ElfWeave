@@ -16,18 +16,24 @@ Specifically optimized for hardware with **8GB VRAM (RTX 5060)** and 32GB RAM, u
 
 ```text
 src/
-├── harness.py          # Central Orchestrator & Autonomous Self-Healer
+├── harness.py               # Slim Entry Point
+├── harness_logic.py         # Execution engine & Tool Registry
+├── harness_planner.py       # LLM Coordination & Prompts
+├── harness_ui.py            # Orchestrator Rendering
 ├── common/
-│   ├── config.py       # Hardware & VRAM optimizations
-│   ├── ollama.py       # Async LLM helpers & robust JSON parsing
-│   └── ui.py           # Synchronized, Responsive TUI manager
+│   ├── config.py            # Global Hardware & Prompt Config
+│   ├── ollama.py            # Async LLM Helpers
+│   ├── types.py             # Shared Data Models
+│   └── ui.py                # Synchronized TUI Manager
 └── modules/
-    ├── code_architect   # Design review & technical debt auditor (NEW)
-    ├── fs_manager       # Repository tree & metadata manager (NEW)
-    ├── browser_agent    # Autonomous web research specialist
-    ├── weather          # Multimodal meteorology analyst
-    ├── knowledge_agent  # Local RAG & semantic search
-    └── monitor_agent    # Real-time resource & log observer
+    ├── weather.py           # Entry: Weather Specialist
+    ├── browser_agent.py     # Entry: Web Research Specialist
+    ├── code_architect.py    # Entry: Design Auditor
+    ├── code_architect_logic.py 
+    ├── code_architect_ui.py
+    ├── fs_manager.py        # Entry: Repository Explorer
+    ├── fs_manager_logic.py
+    └── fs_manager_ui.py
 ```
 
 ## 🧠 Autonomous Learning & Self-Audit
