@@ -75,6 +75,7 @@ from src.common.config import OLLAMA_URL, PLANNER_MODEL, CHECKER_MODEL, REVIEW_M
 # PLANNER_MODEL   = "qwen2.5:3b"
 
 HISTORY_PATH    = Path.home() / ".harness_history.json"
+EXPERIENCE_PATH = Path.home() / ".agent_experience.jsonl"
 UI_REFRESH_HZ   = 10
 MAX_STREAM_LINES = 8
 DEFAULT_TIMEOUT  = 30
@@ -142,6 +143,54 @@ VALIDATOR_SYSTEM = dedent("""\
     Respond with ONLY a JSON object:
     {
       "aligned": bool,
+      "quality_score": float,
+      "notes": "string",
+      "issues": ["string"],
+      "suggested_fix": "string"
+    }
+""")
+
+
+def get_learned_lessons(limit: int = 5) -> str:
+    """Read the last few entries from the experience store."""
+    if not EXPERIENCE_PATH.exists():
+        return "No past experiences recorded yet."
+    
+    lessons = []
+    try:
+        with open(EXPERIENCE_PATH, "r") as f:
+            lines = f.readlines()
+            # Get the last N entries
+            for line in lines[-limit:]:
+                entry = json.loads(line)
+                status = "SUCCESS" if entry.get("aligned") else "FAILURE"
+                issues = " · ".join(entry.get("issues", [])) or "None"
+                lessons.append(
+                    f" - {status}: {entry.get('query')}\n"
+                    f"   Issues: {issues}\n"
+                    f"   Applied Fix: {entry.get('fix', 'None')}"
+                )
+    except Exception as e:
+        return f"Error loading lessons: {e}"
+        
+    return "\n".join(lessons) if lessons else "No past experiences recorded yet."
+
+
+def save_experience(query: str, aligned: bool, score: float, issues: list[str], fix: str = ""):
+    """Save a mission outcome to the long-term experience store."""
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "query":     query,
+        "aligned":    aligned,
+        "score":      score,
+        "issues":     issues,
+        "fix":        fix
+    }
+    try:
+        with open(EXPERIENCE_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
       "quality_score": 0.0 (0.0 to 1.0),
       "issues": ["missing X", "incorrect Y", ...],
       "notes": "critical summary of quality"
@@ -471,13 +520,18 @@ async def tool_analyze_failure(issues: str, plan_context: str, ui: UIState, refr
     # Ingest the actual tool signatures for argument comparison
     catalogue = _tool_catalogue()
     
+    # Ingest past experiences to check for recurring patterns
+    past_lessons = get_learned_lessons(limit=10)
+    
     prompt = (
         f"FAILURE LOGS:\n{issues}\n\n"
         f"PLAN ATTEMPTED:\n{plan_context}\n\n"
         f"TOOL CATALOGUE (Authoritative Signatures):\n{catalogue}\n\n"
+        f"PAST EXPERIENCES & LESSONS:\n{past_lessons}\n\n"
         f"CODE CONTEXT:\n{code_context}\n\n"
         "Analyze the logs. Was there a TypeError (argument mismatch)? A NameError (missing import)? "
-        "Identify the ROOT CAUSE and suggest a SPECIFIC FIX (e.g., 'Do not pass the ui argument to tool X')."
+        "Have we seen this error before in the PAST EXPERIENCES? "
+        "Identify the ROOT CAUSE and suggest a SPECIFIC FIX."
     )
     
     res, _ = await _chat_json(
@@ -847,6 +901,10 @@ async def run(query: str, dry_run: bool = False) -> int:
                 )
                 return 1
 
+            # ── 3. build adaptive prompt ──────────────────────────────
+            lessons = get_learned_lessons(limit=10)
+            D_PLANNER_SYSTEM = PLANNER_SYSTEM + f"\n\nPAST LESSONS LEARNED:\n{lessons}"
+
             while retry_count <= max_retries and not aligned:
                 # ── 3. plan ───────────────────────────────────────────
                 s_plan = ui.add_step(f"plan (attempt {retry_count})").start(); refresh()
@@ -903,6 +961,15 @@ async def run(query: str, dry_run: bool = False) -> int:
                 "timestamp":  time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
             save_history(history)
+            
+            # Save to long-term experience store
+            fix_meta = ""
+            for r in results:
+                if r.plan_step.tool == "repair_code" and not r.error:
+                    fix_meta = r.output
+            
+            save_experience(query, aligned, score, issues, fix=fix_meta)
+            
             s_save.done(f"{HISTORY_PATH.name}"); refresh()
 
             ui.running = False; refresh()

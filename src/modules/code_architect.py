@@ -16,6 +16,7 @@ if _root not in sys.path:
 import argparse
 import asyncio
 import os
+import json
 from textwrap import dedent
 from typing import List, Dict, Any
 
@@ -68,6 +69,19 @@ ARCHITECT_SYSTEM = dedent("""\
 # ══════════════════════════════════════════════════════════════════════
 
 async def analyze_code(files: List[Path], ui: UIState, client) -> Dict[str, Any]:
+    # Load recent experiences/failures from the repository's history
+    exp_path = Path.home() / ".agent_experience.jsonl"
+    past_lessons = ""
+    if exp_path.exists():
+        try:
+            with open(exp_path, "r") as f:
+                lines = f.readlines()
+                for line in lines[-10:]:
+                    entry = json.loads(line)
+                    if not entry.get("aligned", True):
+                        past_lessons += f"\n- Failure in '{entry.get('query')}': {entry.get('issues')}"
+        except Exception: pass
+
     code_bundle = ""
     for f in files:
         if not f.exists(): continue
@@ -77,11 +91,18 @@ async def analyze_code(files: List[Path], ui: UIState, client) -> Dict[str, Any]
         except Exception as e:
             code_bundle += f"\n[error reading {f.name}: {e}]"
 
+    prompt = (
+        f"HISTORICAL FAILURES IN THIS REPO:{past_lessons or 'None'}\n\n"
+        f"SOURCE CODE TO AUDIT:\n{code_bundle}\n\n"
+        "Please analyze these files. Check for architectural debt AND look for patterns "
+        "that might be causing the HISTORICAL FAILURES listed above."
+    )
+
     res, _ = await _chat_json(
         client,
         AGENT_MODEL,
         ARCHITECT_SYSTEM,
-        f"Please analyze these files and provide a structural review:\n{code_bundle}",
+        prompt,
         ui,
         lambda: None,
         "architect"
