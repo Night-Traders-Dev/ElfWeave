@@ -21,16 +21,21 @@ from src.common.ui import UIState
 from src.modules.fs_manager_logic import get_fs_stats
 from src.modules.fs_manager_ui import render_tree, render_stats_table
 
-async def run(target_dir: str, harness: bool = False):
-    ui = UIState()
+async def run(target_dir: str, harness: bool = False) -> int:
+    ui = UIState(agent_name="fs-manager", model_info="Local filesystem")
+    if harness:
+        ui.harness_mode = True
     console = ui.console
     
     root_path = Path(target_dir).expanduser().resolve()
     if not root_path.exists():
         console.print(f"[red]Error: Path {target_dir} does not exist.[/red]")
-        return
+        return 1
 
-    with ui.live_context() as refresh:
+    async with ui:
+        def refresh() -> None:
+            ui.refresh()
+
         s = ui.add_step(f"Scanning {root_path.name}...").start(); refresh()
         stats = await asyncio.to_thread(get_fs_stats, root_path)
         s.done(f"Scanned {stats['files']} files"); refresh()
@@ -43,6 +48,7 @@ async def run(target_dir: str, harness: bool = False):
         # 2. Stats Table
         st = render_stats_table(stats)
         ui.print_card("Filesystem Analytics", st, border_color="green", padding=(0,1) if harness else (1,2))
+    return 0
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -50,4 +56,4 @@ if __name__ == "__main__":
     parser.add_argument("--harness", action="store_true", help="Harness mode")
     args = parser.parse_args()
 
-    asyncio.run(run(args.path, harness=args.harness))
+    raise SystemExit(asyncio.run(run(args.path, harness=args.harness)))

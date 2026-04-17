@@ -1,5 +1,4 @@
 from pathlib import Path
-from pathlib import Path
 from textwrap import dedent
 import multiprocessing
 
@@ -21,6 +20,7 @@ PLANNER_MODEL       = "qwen2.5:7b"      # Stronger at tool-use/reasoning
 CHECKER_MODEL       = "llama3.1:8b"     # Reliable for sanity checks
 REVIEW_MODEL        = "llama3.1:8b"     # Standard validation model
 AGENT_MODEL         = "llama3.1:8b"     # Default persona model
+DEFAULT_MODEL       = AGENT_MODEL
 
 # Memory & Knowledge
 KNOWLEDGE_DIR       = Path.home() / ".elfweave_knowledge"

@@ -17,15 +17,9 @@ _root = str(Path(__file__).resolve().parent.parent.parent)
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
-from rich.console import Console
-from rich.live import Live
-from rich.panel import Panel
-from rich.table import Table
-
-# Common imports
 from src.common.ui import UIState
 from src.common.ollama import setup_ollama
-from .monitor_logic import tail_file, classify_log_line
+from src.modules.monitor_logic import tail_file, classify_log_line
 
 # ══════════════════════════════════════════════════════════════════════
 #  Config

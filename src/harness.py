@@ -30,6 +30,19 @@ from src.harness_logic import (
 from src.harness_planner import sanity_check, plan_task, validate_result
 from src.harness_ui import print_result_card
 
+
+def _read_query(parts: list[str], prompt: str) -> str | None:
+    query = " ".join(parts).strip()
+    if query:
+        return query
+    if not sys.stdin.isatty():
+        print("Error: no query provided. Pass a task on the command line.", file=sys.stderr)
+        return None
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return None
+
 async def run(query: str, dry_run: bool = False) -> int:
     ui = UIState(agent_name="agent-harness", model_info=f"{CHECKER_MODEL} · {PLANNER_MODEL}")
     plan, results = [], []
@@ -110,8 +123,11 @@ def main() -> int:
         if HISTORY_PATH.exists(): HISTORY_PATH.unlink(); print("History cleared")
         return 0
 
-    query = " ".join(args.query).strip() or input("\n  What would you like to do?  ").strip()
-    if not query: return 0
+    query = _read_query(args.query, "\n  What would you like to do?  ")
+    if query is None:
+        return 1
+    if not query:
+        return 0
     return asyncio.run(run(query, dry_run=args.dry_run))
 
 if __name__ == "__main__":

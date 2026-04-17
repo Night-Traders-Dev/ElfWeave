@@ -19,7 +19,7 @@ from ollama import AsyncClient
 from rich.console import Console
 
 from src.common.ui import UIState
-from src.common.ollama import _chat_json, _stream_chat
+from src.common.ollama import _stream_chat
 from src.common.config import (
     OLLAMA_URL, HISTORY_PATH, EXPERIENCE_PATH, 
     PLANNER_MODEL, CHECKER_MODEL, REVIEW_MODEL
@@ -138,8 +138,19 @@ async def tool_shell(cmd: str, ui: UIState, refresh: Callable) -> str:
 
 @register_tool("llm_summarize", "Summarize text using the planner model.")
 async def tool_llm_summarize(text: str, client: AsyncClient, max_sentences: int = 5) -> str:
-    res, _ = await _chat_json(client, PLANNER_MODEL, f"Summarize in {max_sentences} sentences.", text[:6000], None, lambda: None, "summarizer")
-    return res if isinstance(res, str) else str(res)
+    summary, _ = await _stream_chat(
+        client,
+        PLANNER_MODEL,
+        [
+            {"role": "system", "content": f"Summarize the user's text in no more than {max_sentences} sentences."},
+            {"role": "user", "content": text[:6000]},
+        ],
+        None,
+        lambda: None,
+        "summarizer",
+        temperature=0.1,
+    )
+    return summary or "(no summary)"
 
 # ══════════════════════════════════════════════════════════════════════
 #  Specialist Wrappers
@@ -156,16 +167,17 @@ async def _run_tool_subprocess(args: List[str], ui: UIState, refresh: Callable) 
             if t: ui.push_chunk(t); out.append(t); refresh()
     await asyncio.gather(read(proc.stdout, stdout), read(proc.stderr, stderr, True))
     await proc.wait()
-    if proc.returncode != 0: return f"[tool error] {''.join(stderr)}" if stderr else f"[tool error] code {proc.returncode}"
+    if proc.returncode != 0:
+        return f"[tool error] {'\n'.join(stderr)}" if stderr else f"[tool error] code {proc.returncode}"
     return "\n".join(stdout)
 
 @register_tool("weather", "PRIMARY weather Specialist.")
 async def tool_weather(location: str, ui: UIState, refresh: Callable) -> str:
-    return await _run_tool_subprocess(["uv", "run", "--with", "browser-use", "--with", "ollama", "--with", "rich", "python", "src/modules/weather.py", f"weather in {location}", "--harness"], ui, refresh)
+    return await _run_tool_subprocess(["uv", "run", "--with", "ollama", "--with", "rich", "--with", "timezonefinder", "python", "src/modules/weather.py", f"weather in {location}", "--harness"], ui, refresh)
 
 @register_tool("browser", "Autonomous Web Specialist.")
 async def tool_browser(task: str, ui: UIState, refresh: Callable) -> str:
-    return await _run_tool_subprocess(["uv", "run", "--with", "browser-use", "--with", "ollama", "--with", "rich", "python", "src/modules/browser_agent.py", task, "--harness"], ui, refresh)
+    return await _run_tool_subprocess(["uv", "run", "--with", "browser-use", "--with", "langchain-ollama", "--with", "ollama", "--with", "rich", "python", "src/modules/browser_agent.py", task, "--harness"], ui, refresh)
 
 @register_tool("code_architect", "Design & Technical Debt Specialist.")
 async def tool_code_architect(files: List[str], ui: UIState, refresh: Callable) -> str:
@@ -174,6 +186,10 @@ async def tool_code_architect(files: List[str], ui: UIState, refresh: Callable) 
 @register_tool("fs_manager", "Project Explorer Specialist.")
 async def tool_fs_manager(ui: UIState, refresh: Callable, path: str = ".") -> str:
     return await _run_tool_subprocess(["uv", "run", "--with", "rich", "python", "src/modules/fs_manager.py", path, "--harness"], ui, refresh)
+
+@register_tool("knowledge_query", "Search the local knowledge base or repository text.")
+async def tool_knowledge_query(query: str, ui: UIState, refresh: Callable) -> str:
+    return await _run_tool_subprocess(["uv", "run", "--with", "rich", "--with", "numpy", "python", "src/modules/knowledge_agent.py", "--query", query, "--harness"], ui, refresh)
 
 # ══════════════════════════════════════════════════════════════════════
 #  Self-Repair Meta-Tools
@@ -223,7 +239,8 @@ async def execute_plan(plan: List[PlanStep], ui: UIState, refresh: Callable, cli
             results.append(StepResult(step, f"Unknown tool: {step.tool}", True)); s.error("unknown tool"); break
         tool = _TOOL_REGISTRY[step.tool]
         out = await tool.call(_resolve_args(step.args, strings), ui, refresh, client)
-        is_err = "[tool error]" in out
+        stripped = out.lstrip()
+        is_err = stripped.startswith("[tool error]") or stripped.startswith("[error]")
         if is_err:
             s.error("error")
             # Prepend structured context so the validator/planner knows which step failed

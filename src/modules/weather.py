@@ -95,6 +95,19 @@ RESULT_CHECK_SYSTEM = dedent("""\
     Return JSON: { "is_valid": bool, "quality_score": float, "notes": "string", "issues": [] }
 """)
 
+
+def _read_query(parts: list[str]) -> str | None:
+    query = " ".join(parts).strip()
+    if query:
+        return query
+    if not sys.stdin.isatty():
+        print("Error: No weather query provided. Pass a query on the command line.", file=sys.stderr)
+        return None
+    try:
+        return input("Weather query: ").strip()
+    except EOFError:
+        return None
+
 # ══════════════════════════════════════════════════════════════════════
 #  Context builder
 # ══════════════════════════════════════════════════════════════════════
@@ -362,16 +375,15 @@ async def run(query: str, image_path: Optional[str] = None, harness: bool = Fals
             s_cls  = ui.add_step("classify query").start(); refresh()
             s_geo  = ui.add_step("geocode").start();        refresh()
 
-            f_cls_task = _chat_json(client, CHECKER_MODEL, CLASSIFIER_SYSTEM, f"Classify: {query!r}", ui, refresh, "classify")
-            f_geo_task = asyncio.to_thread(geocode, loc_hint)
-            
-            pc_raw, pc_usage = await f_cls_task
-            coords = await f_geo_task
+            (pc_raw, _), coords = await asyncio.gather(
+                _chat_json(client, CHECKER_MODEL, CLASSIFIER_SYSTEM, f"Classify: {query!r}", ui, refresh, "classify"),
+                asyncio.to_thread(geocode, loc_hint),
+            )
 
             is_weather = bool(pc_raw.get("is_weather_query", False))
             location   = str(pc_raw.get("location", "")).strip() or loc_hint
             s_cls.done(f"{'✓ weather' if is_weather else '✗ not weather'} ({pc_raw.get('confidence',0):.0%})")
-            s_geo.done(f"{coords[0]:.4f}°N, {coords[1]:.4f}°W" if coords else "geocode failed")
+            s_geo.done(_coord(str(coords[0]), str(coords[1])) if coords else "geocode failed")
             refresh()
 
             if not is_weather:
@@ -381,11 +393,10 @@ async def run(query: str, image_path: Optional[str] = None, harness: bool = Fals
             s_wx  = ui.add_step("fetch weather").start();  refresh()
             s_mem = ui.add_step("load memory").start();    refresh()
 
-            f_wx_task = asyncio.to_thread(fetch_weather, location, coords)
-            f_mem_task = asyncio.to_thread(load_memory)
-            
-            report = await f_wx_task
-            snapshots = await f_mem_task
+            report, snapshots = await asyncio.gather(
+                asyncio.to_thread(fetch_weather, location, coords),
+                asyncio.to_thread(load_memory),
+            )
 
             s_wx.done(f"{report.desc} · {report.temp_f}°F")
             prev_snap = find_prev_snapshot(report, snapshots)
@@ -436,7 +447,9 @@ async def main() -> None:
     parser.add_argument("--image", metavar="PATH", help="Image for vision analysis")
     parser.add_argument("--harness", action="store_true", help="Harness mode")
     args = parser.parse_args()
-    query = " ".join(args.query) if args.query else input("Weather query: ")
+    query = _read_query(args.query)
+    if query is None:
+        sys.exit(1)
     res = await run(query, args.image, harness=args.harness)
     sys.exit(res)
 

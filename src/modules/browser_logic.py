@@ -1,9 +1,5 @@
 import asyncio
 from typing import Optional, Any, Callable
-from pathlib import Path
-
-from browser_use import Agent, Browser, BrowserConfig
-from langchain_ollama import ChatOllama
 
 # ══════════════════════════════════════════════════════════════════════
 #  Browser Logic
@@ -11,9 +7,20 @@ from langchain_ollama import ChatOllama
 
 class BrowserAgentLogic:
     def __init__(self, model: str, host: str, headless: bool = True):
+        try:
+            from browser_use import Agent, Browser, BrowserConfig
+            from langchain_ollama import ChatOllama
+        except ModuleNotFoundError as exc:
+            missing = exc.name or "browser agent dependency"
+            raise RuntimeError(
+                f"Missing optional browser dependency: {missing}. "
+                "Install the browser extras or run via `uv run --with browser-use --with langchain-ollama`."
+            ) from exc
+
         self.model = model
         self.host = host
         self.headless = headless
+        self._agent_cls = Agent
         
         # Configure the LLM via LangChain (required by browser-use)
         self.llm = ChatOllama(
@@ -34,7 +41,7 @@ class BrowserAgentLogic:
         """
         Runs a browser task and optionally reports progress via ui_callback(step_name, detail).
         """
-        agent = Agent(
+        agent = self._agent_cls(
             task=task,
             llm=self.llm,
             browser=self.browser,

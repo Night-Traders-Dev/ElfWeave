@@ -16,13 +16,8 @@ _root = str(Path(__file__).resolve().parent.parent.parent)
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
-from rich.console import Console
-from rich.live import Live
-from rich.panel import Panel
-
-# Common imports
 from src.common.ui import UIState
-from .knowledge_logic import get_logic
+from src.modules.knowledge_logic import get_logic
 
 # ══════════════════════════════════════════════════════════════════════
 #  Main pipeline
@@ -41,6 +36,9 @@ async def run_query(query: str, ui: UIState, refresh: callable, harness: bool = 
     logic = get_logic()
     # Run heavy query in a thread
     results = await asyncio.to_thread(logic.query, query)
+    if not results:
+        s_q.detail = "no vector hit, trying lexical scan"; refresh()
+        results = await asyncio.to_thread(logic.query_repo, query, Path.cwd())
     
     if not results:
         s_q.error("no results found"); refresh()

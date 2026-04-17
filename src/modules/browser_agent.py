@@ -6,24 +6,18 @@ browser_agent.py — autonomous web navigation assistant using browser-use.
 from __future__ import annotations
 
 import sys
-import time
 import argparse
 import asyncio
 from pathlib import Path
-from typing import Optional
 
 # Ensure the project root is in sys.path for robust absolute imports
 _root = str(Path(__file__).resolve().parent.parent.parent)
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
-from rich.console import Console
-from rich.live import Live
-
-# Common imports
 from src.common.ui import UIState
 from src.common.ollama import setup_ollama
-from .browser_logic import execute_browser_task
+from src.modules.browser_logic import execute_browser_task
 
 # ══════════════════════════════════════════════════════════════════════
 #  Config
@@ -81,7 +75,16 @@ def main() -> None:
     parser.add_argument("--harness", action="store_true", help="Harness mode")
     args = parser.parse_args()
     
-    query = " ".join(args.query) if args.query else input("Browser task: ")
+    if args.query:
+        query = " ".join(args.query).strip()
+    elif sys.stdin.isatty():
+        try:
+            query = input("Browser task: ").strip()
+        except EOFError:
+            query = ""
+    else:
+        print("Error: No task provided. Pass a task on the command line.", file=sys.stderr)
+        sys.exit(1)
     if not query.strip():
         print("Error: No task provided.")
         sys.exit(1)

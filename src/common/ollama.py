@@ -9,6 +9,20 @@ from ollama import AsyncClient, ResponseError
 from .types import TokenUsage
 from .config import OLLAMA_URL, get_ollama_options
 
+
+def _ui_call(ui: Optional[Any], method: str, *args: Any, **kwargs: Any) -> Any:
+    if ui is None:
+        return None
+    fn = getattr(ui, method, None)
+    if callable(fn):
+        return fn(*args, **kwargs)
+    return None
+
+
+def _refresh(refresh: Optional[Callable[[], None]]) -> None:
+    if callable(refresh):
+        refresh()
+
 async def _wait_ollama(client: AsyncClient, timeout: int = 30) -> None:
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -74,12 +88,12 @@ async def _stream_chat(
     client: AsyncClient,
     model: str,
     messages: List[Dict[str, Any]],
-    ui: Any, # UIState
+    ui: Optional[Any],  # UIState
     refresh: Callable[[], None],
     phase: str,
     temperature: float = 0.25,
 ) -> Tuple[str, TokenUsage]:
-    ui.clear_stream()
+    _ui_call(ui, "clear_stream")
     est = TokenUsage(
         prompt_tokens = sum(_est_tokens(
             m.get("content", "") if isinstance(m.get("content"), str)
@@ -88,7 +102,7 @@ async def _stream_chat(
         completion_tokens = 0,
         estimated = True,
     )
-    ui.set_usage(phase, est)
+    _ui_call(ui, "set_usage", phase, est)
 
     parts: List[str] = []
     final_u = est
@@ -100,18 +114,18 @@ async def _stream_chat(
         piece = _msg_content(chunk)
         if piece:
             parts.append(piece)
-            ui.push_chunk(piece)
-            cur = ui.usage.get(phase, est)
+            _ui_call(ui, "push_chunk", piece)
+            cur = ui.usage.get(phase, est) if ui is not None and hasattr(ui, "usage") else est
             cur.completion_tokens = _est_tokens("".join(parts))
-            ui.set_usage(phase, cur)
+            _ui_call(ui, "set_usage", phase, cur)
         if _get(chunk, "eval_count", None) is not None:
             final_u = _usage_from(chunk)
-        refresh()
+        _refresh(refresh)
 
     if final_u.estimated and parts:
         final_u.completion_tokens = _est_tokens("".join(parts))
-    ui.set_usage(phase, final_u)
-    refresh()
+    _ui_call(ui, "set_usage", phase, final_u)
+    _refresh(refresh)
     return "".join(parts).strip(), final_u
 
 async def _chat_json(
@@ -119,7 +133,7 @@ async def _chat_json(
     model: str,
     system: str,
     user: str,
-    ui: Any, # UIState
+    ui: Optional[Any],  # UIState
     refresh: Callable[[], None],
     phase: str,
     retries: int = 2,

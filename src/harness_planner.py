@@ -43,8 +43,8 @@ async def plan_task(client: AsyncClient, query: str, feedback: str, ui: UIState,
 
 async def analyze_failure_logic(issues: str, plan_context: str, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
     from src.harness_logic import get_tool_catalogue, get_learned_lessons
-    _root = str(Path(__file__).resolve().parent.parent.parent)
-    files = list(Path(_root).rglob("*.py"))
+    repo_root = Path(__file__).resolve().parent.parent
+    files = list(repo_root.rglob("*.py"))
     code_context = ""
     relevant = [f for f in files if f.name in issues]
     for f in (relevant + [f for f in files if f not in relevant])[:5]:
@@ -60,8 +60,8 @@ async def analyze_failure_logic(issues: str, plan_context: str, ui: UIState, ref
     return analysis
 
 async def repair_code_logic(filename: str, recommended_fix: str, ui: UIState, refresh: Callable, client: AsyncClient) -> str:
-    _root = str(Path(__file__).resolve().parent.parent.parent)
-    files = list(Path(_root).rglob(filename))
+    repo_root = Path(__file__).resolve().parent.parent
+    files = list(repo_root.rglob(filename))
     if not files: return f"[error] file not found: {filename}"
     target = files[0]
     content = await asyncio.to_thread(target.read_text, errors="replace")

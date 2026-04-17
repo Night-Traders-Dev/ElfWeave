@@ -1,0 +1,22 @@
+[project]
+name = "elfweave"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "ollama",
+    "rich",
+    "timezonefinder",
+]
+
+[project.optional-dependencies]
+browser = [
+    "browser-use",
+    "langchain-ollama",
+]
+knowledge = [
+    "faiss-cpu",
+    "sentence-transformers",
+]
