@@ -172,9 +172,11 @@ def print_weather_card(
     if r.obs_time:
         hdr.append(f"\n  Observed {_obs_to_local(r.obs_time, r.tz_name)}", "grey50")
     hdr.append("\n")
-    console.print(Panel(hdr, border_style="blue", 
-                        expand=True,
-                        box=box.SIMPLE if harness else box.DOUBLE_EDGE))
+    if not harness:
+        console.print(Panel(hdr, border_style="blue", expand=True, box=box.DOUBLE_EDGE))
+    else:
+        # In harness mode, just print the header text to avoid double-boxing
+        console.print(hdr)
 
     L = Table.grid(padding=(0, 2)); L.add_column(style="grey58"); L.add_column(style="bold white")
     R = Table.grid(padding=(0, 2)); R.add_column(style="grey58"); R.add_column(style="bold white")
@@ -194,23 +196,29 @@ def print_weather_card(
     R.add_row("🌧 Precip",      Text(f"{r.precip_in} in",       "sky_blue1"))
     R.add_row("🌥 Cloud cover", Text(f"{_bar(r.cloud_cover)}  {r.cloud_cover}%", "grey74"))
 
-    console.print(Panel(Columns([L, R], equal=True, expand=True),
-                        title="[bold]Current Conditions[/bold]",
-                        expand=True,
-                        border_style=ccol, box=box.SIMPLE if harness else box.ROUNDED))
+    # Current Conditions - remove equal=True to save space on labels
+    cond_node = Columns([L, R], equal=False, expand=True)
+    if not harness:
+        console.print(Panel(cond_node, title="[bold]Current Conditions[/bold]", expand=True, border_style=ccol, box=box.ROUNDED))
+    else:
+        console.print(Rule("[bold]Current Conditions[/bold]", style=ccol))
+        console.print(cond_node)
 
     if r.forecast and r.forecast[0].hourly:
         ht = Table(box=box.SIMPLE_HEAD, expand=True, show_header=True, header_style="bold white")
         ht.add_column("Time",       style="bold white")
         ht.add_column("Conditions")
         ht.add_column("Temp",       justify="right", style="bold")
-        ht.add_column("Feels",      justify="right", style="dim white")
-        ht.add_column("Hum",        justify="right", style="cyan")
+        if not harness:
+            ht.add_column("Feels",      justify="right", style="dim white")
+            ht.add_column("Hum",        justify="right", style="cyan")
         ht.add_column("Wind",       justify="right", style="sky_blue1")
-        ht.add_column("UV",         justify="center")
+        if not harness:
+            ht.add_column("UV",         justify="center")
         ht.add_column("🌧",         justify="right", style="sky_blue1")
-        ht.add_column("❄",          justify="right", style="cyan")
-        ht.add_column("Cloud",      justify="right", style="grey74")
+        if not harness:
+            ht.add_column("❄",          justify="right", style="cyan")
+            ht.add_column("Cloud",      justify="right", style="grey74")
 
         for slot in r.forecast[0].hourly:
             se, sc = _cstyle(slot.desc)
@@ -222,14 +230,23 @@ def print_weather_card(
                       "bold yellow3" if tf < 80 else "bold red")
             except Exception: tc = "white"
             uvt2 = Text(_uv_label(slot.uv_index), _uv_col(slot.uv_index))
-            ht.add_row(slot.time_label + now_mark, Text(f"{se} {slot.desc}", sc),
-                Text(f"{slot.temp_f}°F", tc), f"{slot.feels_f}°F", f"{slot.humidity}%",
-                f"{slot.wind_dir} {slot.wind_mph}", uvt2, f"{slot.rain_chance}%",
-                f"{slot.snow_chance}%", f"{slot.cloud_cover}%", style=row_style)
+            row_args = [slot.time_label + now_mark, Text(f"{se} {slot.desc}", sc), Text(f"{slot.temp_f}°F", tc)]
+            if not harness:
+                row_args.extend([f"{slot.feels_f}°F", f"{slot.humidity}%"])
+            row_args.append(f"{slot.wind_dir} {slot.wind_mph}")
+            if not harness:
+                row_args.append(uvt2)
+            row_args.append(f"{slot.rain_chance}%")
+            if not harness:
+                row_args.extend([f"{slot.snow_chance}%", f"{slot.cloud_cover}%"])
+            
+            ht.add_row(*row_args, style=row_style)
 
-        console.print(Panel(ht, title=f"[bold]Today's Hourly Forecast[/bold]",
-                            expand=False if harness else True,
-                            border_style="cyan", box=box.SIMPLE if harness else box.ROUNDED))
+        if not harness:
+            console.print(Panel(ht, title=f"[bold]Today's Hourly Forecast[/bold]", expand=True, border_style="cyan", box=box.ROUNDED))
+        else:
+            console.print(Rule("[bold]Today's Hourly Forecast[/bold]", style="cyan"))
+            console.print(ht)
 
     if comp.found and prev_snap:
         dt = Table(box=box.SIMPLE, expand=True, show_header=True, header_style="bold grey50")
@@ -251,18 +268,28 @@ def print_weather_card(
                             border_style="grey35", box=box.ROUNDED))
 
     if r.forecast:
-        ft = Table(box=box.SIMPLE_HEAD, expand=not harness, show_header=True, header_style="bold white")
-        ft.add_column("Day",       style="bold white", min_width=18); ft.add_column("Conditions")
+        ft = Table(box=box.SIMPLE_HEAD, expand=True, show_header=True, header_style="bold white")
+        ft.add_column("Day",       style="bold white"); ft.add_column("Conditions")
         ft.add_column("High",      justify="right", style="bold red"); ft.add_column("Low",       justify="right", style="bold cyan")
-        ft.add_column("UV",        justify="center"); ft.add_column("🌧 Rain",   justify="right", style="sky_blue1")
-        ft.add_column("❄ Snow",    justify="right", style="cyan"); ft.add_column("Sunrise",   justify="right", style="yellow3")
-        ft.add_column("Sunset",    justify="right", style="orange3"); ft.add_column("Moon",      justify="center")
+        if not harness:
+            ft.add_column("UV",        justify="center")
+        ft.add_column("🌧 Rain",   justify="right", style="sky_blue1")
+        if not harness:
+            ft.add_column("❄ Snow",    justify="right", style="cyan")
+            ft.add_column("Sunrise",   justify="right", style="yellow3")
+            ft.add_column("Sunset",    justify="right", style="orange3")
+            ft.add_column("Moon",      justify="center")
         for i, day in enumerate(r.forecast):
             fe, _ = _cstyle(day.desc); moon = f"{_moon_em(day.moon_phase)} {day.moon_phase}"
             if day.moon_illumination: moon += f" {day.moon_illumination}%"
-            ft.add_row(_day_label(day.date, i), f"{fe} {day.desc}" if day.desc else "—",
-                f"{day.high_f}°F", f"{day.low_f}°F", Text(_uv_label(day.uv_index), _uv_col(day.uv_index)),
-                f"{day.rain_chance}%", f"{day.snow_chance}%", day.sunrise or "—", day.sunset or "—", moon or "—")
+            row_args = [_day_label(day.date, i), f"{fe} {day.desc}" if day.desc else "—", f"{day.high_f}°F", f"{day.low_f}°F"]
+            if not harness:
+                row_args.append(Text(_uv_label(day.uv_index), _uv_col(day.uv_index)))
+            row_args.append(f"{day.rain_chance}%")
+            if not harness:
+                row_args.extend([f"{day.snow_chance}%", day.sunrise or "—", day.sunset or "—", moon or "—"])
+            
+            ft.add_row(*row_args)
         console.print(Panel(ft, title="[bold]3-Day Forecast[/bold]",
                             expand=True,
                             border_style="yellow3", box=box.SIMPLE if harness else box.ROUNDED))

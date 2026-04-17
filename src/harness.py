@@ -676,7 +676,7 @@ def print_result_card(
     # ── Final Output ──
     if results:
         final_out = results[-1].output
-        ui.print_card("Final Output", Text.from_ansi(final_out[:8000]), border_color="green")
+        ui.print_card("Final Output", Text.from_ansi(final_out[:8000]), border_color="green", padding=(0, 1))
 
     # ── Validation ──
     aligned = validation.get("aligned", True)

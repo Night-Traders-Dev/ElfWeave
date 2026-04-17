@@ -196,7 +196,7 @@ class UIState:
 
         return Group(*parts)
 
-    def print_card(self, title: str, content: Any, border_color: str = "blue", metadata: Optional[str] = None) -> None:
+    def print_card(self, title: str, content: Any, border_color: str = "blue", metadata: Optional[str] = None, padding: tuple = (1, 2)) -> None:
         """Print a standard premium result card in the Claude Code / Weather UI style."""
         self.console.print()
         self.console.print(Rule(f"[bold {border_color}]{title}[/bold {border_color}]", style=border_color))
@@ -205,7 +205,7 @@ class UIState:
             Panel(
                 content,
                 border_style=border_color,
-                padding=(1, 2),
+                padding=padding,
                 expand=True,
                 subtitle=f"[dim]{metadata}[/dim]" if metadata else None
             )
