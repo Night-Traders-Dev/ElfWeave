@@ -10,7 +10,7 @@ echo "════════════════════════�
 echo ""
 
 # Check for CUDA
-if ! python -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+if ! python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
     echo "❌ ERROR: CUDA is not available or torch was installed without CUDA support"
     echo ""
     echo "Please ensure:"
@@ -23,8 +23,8 @@ if ! python -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/de
 fi
 
 echo "✓ CUDA detected"
-python -c "import torch; print(f'  PyTorch {torch.__version__} with CUDA {torch.version.cuda}')"
-python -c "import torch; print(f'  GPU: {torch.cuda.get_device_name(0)}')"
+python3 -c "import torch; print(f'  PyTorch {torch.__version__} with CUDA {torch.version.cuda}')"
+python3 -c "import torch; print(f'  GPU: {torch.cuda.get_device_name(0)}')"
 echo ""
 
 # Install dependencies
@@ -49,11 +49,11 @@ echo "  - Fallback: Ollama (qwen3.5:0.8b)"
 echo ""
 echo "Usage:"
 echo "  # Run with megakernel enabled:"
-echo "  python src/harness.py --use-kernel \"your task here\""
+echo "  python3 src/harness.py --use-kernel \"your task here\""
 echo ""
 echo "  # Or set environment variable:"
 echo "  export ELFWEAVE_INFERENCE_BACKEND=hybrid"
-echo "  python src/harness.py \"your task here\""
+echo "  python3 src/harness.py \"your task here\""
 echo ""
 echo "Model configuration:"
 echo "  - CHECKER_MODEL:  qwen3.5:0.8b (megakernel for sanity checks)"
