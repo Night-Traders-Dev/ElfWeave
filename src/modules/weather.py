@@ -173,11 +173,11 @@ def print_weather_card(
         hdr.append(f"\n  Observed {_obs_to_local(r.obs_time, r.tz_name)}", "grey50")
     hdr.append("\n")
     console.print(Panel(hdr, border_style="blue", 
-                        expand=False if harness else True,
+                        expand=True,
                         box=box.SIMPLE if harness else box.DOUBLE_EDGE))
 
-    L = Table.grid(padding=(0, 2)); L.add_column(style="grey58", min_width=15); L.add_column(style="bold white")
-    R = Table.grid(padding=(0, 2)); R.add_column(style="grey58", min_width=15); R.add_column(style="bold white")
+    L = Table.grid(padding=(0, 2)); L.add_column(style="grey58"); L.add_column(style="bold white")
+    R = Table.grid(padding=(0, 2)); R.add_column(style="grey58"); R.add_column(style="bold white")
 
     tt = Text(); tt.append(f"{r.temp_f}°F", f"bold {ccol}"); tt.append(f"  feels {r.feels_f}°F", "white")
     uvt = Text(); uvt.append(_uv_label(r.uv_index), _uv_col(r.uv_index))
@@ -194,15 +194,15 @@ def print_weather_card(
     R.add_row("🌧 Precip",      Text(f"{r.precip_in} in",       "sky_blue1"))
     R.add_row("🌥 Cloud cover", Text(f"{_bar(r.cloud_cover)}  {r.cloud_cover}%", "grey74"))
 
-    console.print(Panel(Columns([L, R], equal=True, expand=not harness),
+    console.print(Panel(Columns([L, R], equal=True, expand=True),
                         title="[bold]Current Conditions[/bold]",
-                        expand=False if harness else True,
+                        expand=True,
                         border_style=ccol, box=box.SIMPLE if harness else box.ROUNDED))
 
     if r.forecast and r.forecast[0].hourly:
-        ht = Table(box=box.SIMPLE_HEAD, expand=not harness, show_header=True, header_style="bold white")
-        ht.add_column("Time",       style="bold white", min_width=6)
-        ht.add_column("Conditions", min_width=18)
+        ht = Table(box=box.SIMPLE_HEAD, expand=True, show_header=True, header_style="bold white")
+        ht.add_column("Time",       style="bold white")
+        ht.add_column("Conditions")
         ht.add_column("Temp",       justify="right", style="bold")
         ht.add_column("Feels",      justify="right", style="dim white")
         ht.add_column("Hum",        justify="right", style="cyan")
@@ -264,7 +264,7 @@ def print_weather_card(
                 f"{day.high_f}°F", f"{day.low_f}°F", Text(_uv_label(day.uv_index), _uv_col(day.uv_index)),
                 f"{day.rain_chance}%", f"{day.snow_chance}%", day.sunrise or "—", day.sunset or "—", moon or "—")
         console.print(Panel(ft, title="[bold]3-Day Forecast[/bold]",
-                            expand=False if harness else True,
+                            expand=True,
                             border_style="yellow3", box=box.SIMPLE if harness else box.ROUNDED))
 
     if vision:

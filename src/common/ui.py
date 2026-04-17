@@ -171,14 +171,14 @@ class UIState:
         # ── streaming output ──────────────────────────────────────────
         if any(c.strip() for c in chunks):
             parts.append(Text(""))
-            parts.append(Text("  " + "─" * 64, "dim"))
+            parts.append(Rule(style="dim"))
             for i, line in enumerate(chunks):
                 row = Text("  ")
                 row.append(line, "white")
                 if i == len(chunks) - 1 and running:
                     row.append("▌", "blink bold cyan")
                 parts.append(row)
-            parts.append(Text("  " + "─" * 64, "dim"))
+            parts.append(Rule(style="dim"))
 
         # ── footer ────────────────────────────────────────────────────
         parts.append(Text(""))
@@ -206,7 +206,7 @@ class UIState:
                 content,
                 border_style=border_color,
                 padding=(1, 2),
-                expand=False,
+                expand=True,
                 subtitle=f"[dim]{metadata}[/dim]" if metadata else None
             )
         )

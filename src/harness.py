@@ -659,12 +659,12 @@ def print_result_card(
     validation: dict,
 ) -> None:
     # ── Plan Table ──
-    tbl = Table(show_header=True, header_style="bold blue", box=None, padding=(0, 2))
-    tbl.add_column("#",    style="dim",        width=4)
-    tbl.add_column("Tool", style="cyan bold",  width=18)
-    tbl.add_column("Description",              width=34)
-    tbl.add_column("Status",                   width=8)
-    tbl.add_column("Output preview",           width=36)
+    tbl = Table(show_header=True, header_style="bold blue", box=None, padding=(0, 2), expand=True)
+    tbl.add_column("#",    style="dim",        ratio=1)
+    tbl.add_column("Tool", style="cyan bold",  ratio=3)
+    tbl.add_column("Description",              ratio=8)
+    tbl.add_column("Status",                   ratio=2)
+    tbl.add_column("Output preview",           ratio=10)
 
     for i, r in enumerate(results):
         status = "[red]error[/red]" if r.error else "[green]ok[/green]"
