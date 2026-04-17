@@ -35,6 +35,11 @@ class CliSmokeTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("knowledge_query", proc.stdout)
 
+    def test_main_accepts_use_kernel_flag(self) -> None:
+        proc = run_cli("main.py", "--use-kernel", "--list-tools")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("knowledge_query", proc.stdout)
+
     def test_fs_manager_runs(self) -> None:
         proc = run_cli("src/modules/fs_manager.py", ".", "--harness", columns=72)
         self.assertEqual(proc.returncode, 0)

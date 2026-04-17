@@ -3,6 +3,12 @@ from pathlib import Path
 from textwrap import dedent
 import multiprocessing
 
+from .kernel_bootstrap import (
+    DEFAULT_MEGAKERNEL_MODEL,
+    DEFAULT_MEGAKERNEL_PHASES,
+    bundled_megakernel_repo,
+)
+
 # ══════════════════════════════════════════════════════════════════════
 #  Hardware & Performance Config (RTX 5060 8GB / 32GB RAM)
 # ════════════════════════════════════════════════─═════════════════════
@@ -23,17 +29,23 @@ REVIEW_MODEL        = os.getenv("ELFWEAVE_REVIEW_MODEL", "llama3.1:8b")      # S
 AGENT_MODEL         = os.getenv("ELFWEAVE_AGENT_MODEL", "llama3.1:8b")       # Default persona model
 DEFAULT_MODEL       = AGENT_MODEL
 
+REPO_ROOT           = Path(__file__).resolve().parents[2]
+DEFAULT_MEGAKERNEL_REPO = bundled_megakernel_repo(REPO_ROOT)
+
 # Optional Megakernel Backend
 INFERENCE_BACKEND   = os.getenv("ELFWEAVE_INFERENCE_BACKEND", "ollama").strip().lower()
 MEGAKERNEL_ENABLED  = INFERENCE_BACKEND in {"hybrid", "megakernel"} or os.getenv("ELFWEAVE_MEGAKERNEL_ENABLE", "0") == "1"
-MEGAKERNEL_REPO     = os.getenv("ELFWEAVE_MEGAKERNEL_REPO", "").strip()
-MEGAKERNEL_MODEL    = os.getenv("ELFWEAVE_MEGAKERNEL_MODEL", "Qwen/Qwen3.5-0.8B").strip()
+MEGAKERNEL_REPO     = os.getenv(
+    "ELFWEAVE_MEGAKERNEL_REPO",
+    str(DEFAULT_MEGAKERNEL_REPO) if DEFAULT_MEGAKERNEL_REPO.exists() else "",
+).strip()
+MEGAKERNEL_MODEL    = os.getenv("ELFWEAVE_MEGAKERNEL_MODEL", DEFAULT_MEGAKERNEL_MODEL).strip()
 MEGAKERNEL_MAX_TOKENS = int(os.getenv("ELFWEAVE_MEGAKERNEL_MAX_TOKENS", "256"))
 MEGAKERNEL_PHASES   = tuple(
     part.strip().lower()
     for part in os.getenv(
         "ELFWEAVE_MEGAKERNEL_PHASES",
-        "planner,sanity,validator,analyzer,summarizer",
+        DEFAULT_MEGAKERNEL_PHASES,
     ).split(",")
     if part.strip()
 )
@@ -41,7 +53,7 @@ MEGAKERNEL_FALLBACK = os.getenv("ELFWEAVE_MEGAKERNEL_FALLBACK", "1") != "0"
 
 # Memory & Knowledge
 KNOWLEDGE_DIR       = Path.home() / ".elfweave_knowledge"
-AGENT_MANUALS_DIR   = Path(__file__).resolve().parent.parent.parent / "knowledge" / "agents"
+AGENT_MANUALS_DIR   = REPO_ROOT / "knowledge" / "agents"
 
 # Global Paths & Timing
 HISTORY_PATH        = Path.home() / ".harness_history.json"

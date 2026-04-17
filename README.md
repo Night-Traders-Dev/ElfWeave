@@ -68,24 +68,38 @@ Current behavior:
 - Megakernel can be enabled for selected phases such as `planner`, `sanity`, and `validator`.
 - If the Megakernel path is unavailable or fails, ElfWeave falls back to Ollama by default.
 - This path is currently best suited for **small text-only orchestration phases**, not the full platform.
+- The repository now vendors Luce Megakernel as the `third_party/luce-megakernel` submodule.
 
-Suggested setup:
+Clone with submodules, or initialize them after cloning:
 
 ```bash
-git clone https://github.com/Luce-Org/luce-megakernel /path/to/luce-megakernel
-cd /path/to/luce-megakernel
+git submodule update --init --recursive
+```
+
+One-time kernel build on the `elf_g` device:
+
+```bash
+cd third_party/luce-megakernel
 pip install -e .
 pip install transformers accelerate
 ```
 
-Then enable it for ElfWeave:
+Then run ElfWeave with the bundled hybrid defaults:
+
+```bash
+uv run --with browser-use --with ollama python main.py --use-kernel "weather ashland kentucky"
+```
+
+`--use-kernel` applies the same default behavior as:
 
 ```bash
 export ELFWEAVE_INFERENCE_BACKEND=hybrid
-export ELFWEAVE_MEGAKERNEL_REPO=/path/to/luce-megakernel
+export ELFWEAVE_MEGAKERNEL_REPO=/home/kraken/elf_g/ElfWeave/third_party/luce-megakernel
 export ELFWEAVE_MEGAKERNEL_MODEL=Qwen/Qwen3.5-0.8B
 export ELFWEAVE_MEGAKERNEL_PHASES=planner,sanity,validator,analyzer,summarizer
 ```
+
+Those values are still overridable with explicit environment variables.
 
 Available environment flags:
 
@@ -95,12 +109,20 @@ Available environment flags:
 - `ELFWEAVE_MEGAKERNEL_PHASES=planner,sanity,validator,...`
 - `ELFWEAVE_MEGAKERNEL_MAX_TOKENS=256`
 - `ELFWEAVE_MEGAKERNEL_FALLBACK=1`
+- `ELFWEAVE_MEGAKERNEL_CUDA_ARCH=86` to force a specific CUDA arch when building the submodule
+
+What changed for ElfWeave compatibility:
+
+- ElfWeave now prefers the vendored submodule path automatically instead of requiring a separate clone.
+- The vendored megakernel build now targets the active GPU architecture or `ELFWEAVE_MEGAKERNEL_CUDA_ARCH`, instead of hard-coding `sm_86`.
+- ElfWeave only routes **short text-only** phases to Luce Megakernel and keeps long prompts on Ollama, because the upstream kernel currently exposes a 2048-token context window in `third_party/luce-megakernel/model.py`.
 
 Important limitations:
 
 - Luce Megakernel is architecture-specific and currently targets **Qwen 3.5-0.8B hybrid DeltaNet/Attention**, not ElfWeave's default Ollama models.
 - This integration is an adapter layer, not a drop-in replacement for Ollama.
 - Vision/image requests and unsupported phases stay on Ollama.
+- If the compiled CUDA extension or `torch`/`transformers` dependencies are missing, `--use-kernel` falls back to Ollama and keeps the mission running.
 
 ## 🤖 Agent Roster & Examples
 

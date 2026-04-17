@@ -11,6 +11,7 @@ from typing import Any, Tuple, List, Dict, Callable, Optional
 from ollama import AsyncClient, ResponseError
 from .types import TokenUsage
 from .config import (
+    INFERENCE_BACKEND,
     OLLAMA_URL,
     MEGAKERNEL_ENABLED,
     MEGAKERNEL_FALLBACK,
@@ -20,6 +21,7 @@ from .config import (
     MEGAKERNEL_REPO,
     get_ollama_options,
 )
+from .kernel_bootstrap import DEFAULT_MEGAKERNEL_MODEL
 
 
 def _ui_call(ui: Optional[Any], method: str, *args: Any, **kwargs: Any) -> Any:
@@ -47,6 +49,7 @@ class MegaKernelRuntime:
         self.repo_path = Path(repo_path).expanduser()
         self.model_name = model_name
         self.max_tokens = max_tokens
+        self.max_context_tokens = 2048
         self._lock = asyncio.Lock()
         self._module = None
         self._decoder = None
@@ -54,6 +57,33 @@ class MegaKernelRuntime:
     @property
     def configured(self) -> bool:
         return bool(self.repo_path) and (self.repo_path / "model.py").exists()
+
+    def availability_reason_sync(self) -> str:
+        if not self.configured:
+            return f"megakernel repo is missing model.py at {self.repo_path}"
+        if self.model_name != DEFAULT_MEGAKERNEL_MODEL:
+            return (
+                f"luce-megakernel currently supports {DEFAULT_MEGAKERNEL_MODEL}, "
+                f"not {self.model_name}"
+            )
+
+        repo_str = str(self.repo_path)
+        if repo_str not in sys.path:
+            sys.path.insert(0, repo_str)
+
+        if importlib.util.find_spec("torch") is None:
+            return "torch is not installed in the active environment"
+        if importlib.util.find_spec("transformers") is None:
+            return "transformers is not installed in the active environment"
+        if importlib.util.find_spec("qwen35_megakernel_bf16_C") is None:
+            return (
+                "the qwen35_megakernel_bf16_C extension is not built; "
+                "install the submodule with `pip install -e third_party/luce-megakernel`"
+            )
+        return ""
+
+    async def availability_reason(self) -> str:
+        return await asyncio.to_thread(self.availability_reason_sync)
 
     def _load_module_sync(self):
         if self._module is not None:
@@ -69,6 +99,7 @@ class MegaKernelRuntime:
             raise RuntimeError(f"Unable to load megakernel module from {model_file}")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        self.max_context_tokens = int(getattr(module, "MAX_SEQ_LEN", self.max_context_tokens))
         self._module = module
         return module
 
@@ -76,8 +107,35 @@ class MegaKernelRuntime:
         if self._decoder is not None:
             return self._decoder
         module = self._load_module_sync()
-        self._decoder = module.Decoder(model_name=self.model_name, verbose=False)
+        try:
+            self._decoder = module.Decoder(model_name=self.model_name, verbose=False)
+        except ModuleNotFoundError as exc:
+            missing = exc.name or "dependency"
+            raise RuntimeError(
+                "Megakernel dependencies are incomplete. "
+                "Install torch with CUDA support, then run "
+                "`pip install -e third_party/luce-megakernel` and "
+                "`pip install transformers accelerate`."
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(f"Megakernel initialization failed: {exc}") from exc
         return self._decoder
+
+    def supports_request(
+        self,
+        messages: List[Dict[str, Any]],
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, str]:
+        if self.model_name != DEFAULT_MEGAKERNEL_MODEL:
+            return False, f"unsupported model {self.model_name}"
+
+        options = options or {}
+        max_tokens = int(options.get("num_predict") or options.get("max_tokens") or self.max_tokens)
+        prompt_tokens = sum(_rough_token_estimate(str(message.get("content", ""))) for message in messages)
+        safety_margin = 64
+        if prompt_tokens + max_tokens + safety_margin > self.max_context_tokens:
+            return False, "prompt exceeds Luce Megakernel context budget"
+        return True, ""
 
     async def warmup(self) -> None:
         async with self._lock:
@@ -151,6 +209,7 @@ class InferenceClient:
         self.megakernel = megakernel
         self.megakernel_phases = {phase.strip().lower() for phase in (megakernel_phases or []) if phase}
         self.fallback_to_ollama = fallback_to_ollama
+        self.backend_note = "Ollama ready"
 
     async def list(self):
         if self.ollama_client is None:
@@ -167,7 +226,12 @@ class InferenceClient:
             return None
         return await self.ollama_client.pull(model)
 
-    def _can_use_megakernel(self, phase: str, messages: List[Dict[str, Any]]) -> bool:
+    def _can_use_megakernel(
+        self,
+        phase: str,
+        messages: List[Dict[str, Any]],
+        options: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         if self.megakernel is None:
             return False
         if phase.strip().lower() not in self.megakernel_phases:
@@ -176,6 +240,10 @@ class InferenceClient:
             if message.get("images"):
                 return False
             if not isinstance(message.get("content", ""), str):
+                return False
+        if hasattr(self.megakernel, "supports_request"):
+            allowed, _reason = self.megakernel.supports_request(messages, options=options)
+            if not allowed:
                 return False
         return True
 
@@ -200,7 +268,7 @@ class InferenceClient:
         options: Optional[Dict[str, Any]] = None,
     ):
         phase = phase.strip().lower()
-        if self._can_use_megakernel(phase, messages):
+        if self._can_use_megakernel(phase, messages, options=options):
             try:
                 return await self.megakernel.chat(model=model, messages=messages, stream=stream, options=options)
             except Exception:
@@ -234,7 +302,7 @@ async def _ensure_model(client: AsyncClient, model: str) -> None:
         else:
             raise
 
-async def _warmup(client: AsyncClient, model: str, phase: str = "") -> None:
+async def _warmup(client: Any, model: str, phase: str = "") -> None:
     """Send a trivial request so the model is resident in VRAM before the real call."""
     try:
         if hasattr(client, "warmup"):
@@ -246,7 +314,12 @@ async def _warmup(client: AsyncClient, model: str, phase: str = "") -> None:
     except Exception:
         pass
 
-async def setup_ollama(url: str, models: List[str]) -> AsyncClient:
+def _rough_token_estimate(text: str) -> int:
+    compact = " ".join(str(text).split())
+    return max(1, len(compact) // 3)
+
+
+async def setup_ollama(url: str, models: List[str]) -> InferenceClient:
     ollama_client = AsyncClient(host=url)
     try:
         await ollama_client.list()
@@ -258,17 +331,28 @@ async def setup_ollama(url: str, models: List[str]) -> AsyncClient:
         await _ensure_model(ollama_client, m)
 
     megakernel = None
+    backend_note = "Ollama ready"
     if MEGAKERNEL_ENABLED and MEGAKERNEL_REPO:
         candidate = MegaKernelRuntime(MEGAKERNEL_REPO, MEGAKERNEL_MODEL, max_tokens=MEGAKERNEL_MAX_TOKENS)
         if candidate.configured:
-            megakernel = candidate
+            reason = await candidate.availability_reason()
+            if reason:
+                backend_note = f"{INFERENCE_BACKEND} requested; using Ollama ({reason})"
+            else:
+                megakernel = candidate
+                phases = ",".join(MEGAKERNEL_PHASES)
+                backend_note = f"{INFERENCE_BACKEND} ready ({MEGAKERNEL_MODEL}; {phases})"
+        else:
+            backend_note = f"{INFERENCE_BACKEND} requested; using Ollama (repo not configured)"
 
-    return InferenceClient(
+    client = InferenceClient(
         ollama_client=ollama_client,
         megakernel=megakernel,
         megakernel_phases=list(MEGAKERNEL_PHASES),
         fallback_to_ollama=MEGAKERNEL_FALLBACK,
     )
+    client.backend_note = backend_note
+    return client
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
     return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)

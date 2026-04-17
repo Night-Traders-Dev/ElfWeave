@@ -13,6 +13,10 @@ _root = str(Path(__file__).resolve().parent.parent)
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
+from src.common.kernel_bootstrap import apply_kernel_env, argv_requests_kernel
+
+apply_kernel_env(argv_requests_kernel(sys.argv))
+
 import argparse
 import asyncio
 import time
@@ -21,6 +25,7 @@ from textwrap import dedent
 from src.common.ui import UIState
 from src.common.config import (
     OLLAMA_URL, CHECKER_MODEL, PLANNER_MODEL, REVIEW_MODEL,
+    INFERENCE_BACKEND,
     HISTORY_PATH
 )
 from src.common.ollama import setup_ollama, _warmup
@@ -56,7 +61,10 @@ def _build_retry_feedback(results: list, validation: dict) -> str:
     return "\n".join(lines)
 
 async def run(query: str, dry_run: bool = False) -> int:
-    ui = UIState(agent_name="agent-harness", model_info=f"{CHECKER_MODEL} · {PLANNER_MODEL}")
+    model_info = f"{CHECKER_MODEL} · {PLANNER_MODEL}"
+    if INFERENCE_BACKEND != "ollama":
+        model_info = f"{model_info} · {INFERENCE_BACKEND}"
+    ui = UIState(agent_name="agent-harness", model_info=model_info)
     plan, results = [], []
     aligned, retry_count, max_retries = False, 0, 2
     last_feedback = ""
@@ -73,7 +81,7 @@ async def run(query: str, dry_run: bool = False) -> int:
                 _warmup(client, PLANNER_MODEL, phase="planner"),
                 _warmup(client, REVIEW_MODEL, phase="validator"),
             )
-            s_init.done("Ollama ready"); refresh()
+            s_init.done(getattr(client, "backend_note", "Ollama ready")); refresh()
 
             # 2. Sanity
             s_chk = ui.add_step("sanity check").start(); refresh()
@@ -130,9 +138,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="ElfWeave Orchestrator", formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("query", nargs="*", help="Task query")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--use-kernel", action="store_true", help="Enable the bundled Luce Megakernel hybrid backend.")
     ap.add_argument("--list-tools", action="store_true")
     ap.add_argument("--clear-history", action="store_true")
     args = ap.parse_args()
+
+    apply_kernel_env(args.use_kernel)
 
     if args.list_tools:
         print("\nTools:"); [print(f"  {td.signature}\n    {td.description}") for td in _TOOL_REGISTRY.values()]; return 0
