@@ -18,7 +18,8 @@ OLLAMA_URL          = "http://localhost:11434"
 
 # Resource Limits
 # For 8GB VRAM, 8k context is the "sweet spot" while staying 100% on GPU.
-OLLAMA_NUM_CTX      = 8192
+# Note: This is a default value; actual context size depends on model capabilities
+OLLAMA_NUM_CTX      = int(os.getenv("ELFWEAVE_OLLAMA_CTX", "8192"))
 OLLAMA_NUM_GPU      = 99        # Force max layers offload
 OLLAMA_NUM_THREAD   = multiprocessing.cpu_count() // 2
 

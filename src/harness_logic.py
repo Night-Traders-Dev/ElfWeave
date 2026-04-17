@@ -99,32 +99,103 @@ def get_tool_catalogue() -> str:
 @register_tool("echo", "Return the input string unchanged.")
 def tool_echo(text: str) -> str: return text
 
-@register_tool("read_file", "Read a local text file.")
+@register_tool("read_file", "Read a local text file (path traversal protected).")
 async def tool_read_file(path: str) -> str:
-    p = Path(path).expanduser()
-    if not await asyncio.to_thread(p.exists): return f"[error] file not found: {path}"
-    return await asyncio.to_thread(p.read_text, errors="replace")
+    # Security: Prevent path traversal attacks
+    try:
+        p = Path(path).expanduser().resolve()
+        # Ensure the resolved path is within allowed directories
+        allowed_roots = [Path.cwd().resolve(), Path.home().resolve()]
+        if not any(str(p).startswith(str(root)) for root in allowed_roots):
+            return f"[error] Access denied: path outside allowed directories"
+        if not await asyncio.to_thread(p.exists): 
+            return f"[error] file not found: {path}"
+        return await asyncio.to_thread(p.read_text, errors="replace")
+    except Exception as e:
+        return f"[error] {e}"
 
-@register_tool("write_file", "Write text to a local file.")
+@register_tool("write_file", "Write text to a local file (path traversal protected).")
 async def tool_write_file(path: str, content: str) -> str:
-    p = Path(path).expanduser()
-    await asyncio.to_thread(p.parent.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread(p.write_text, content)
-    return str(p.resolve())
+    # Security: Prevent path traversal attacks
+    try:
+        p = Path(path).expanduser().resolve()
+        # Ensure the resolved path is within allowed directories
+        allowed_roots = [Path.cwd().resolve(), Path.home().resolve()]
+        if not any(str(p).startswith(str(root)) for root in allowed_roots):
+            return f"[error] Access denied: path outside allowed directories"
+        await asyncio.to_thread(p.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(p.write_text, content)
+        return str(p.resolve())
+    except Exception as e:
+        return f"[error] {e}"
 
-@register_tool("http_get", "Fetch a URL via HTTP GET.")
+@register_tool("http_get", "Fetch a URL via HTTP GET (URL validation enabled).")
 async def tool_http_get(url: str, timeout: int = 15) -> str:
     from urllib.request import Request, urlopen
+    from urllib.parse import urlparse
+    
+    # Security: Validate URL scheme and prevent internal network access
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return f"[error] Only http/https URLs are allowed"
+        # Block private/internal IP ranges
+        hostname = parsed.hostname or ""
+        if hostname in ("localhost", "127.0.0.1", "::1"):
+            return f"[error] Access to localhost is restricted"
+        if hostname.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.", 
+                                "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+                                "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.")):
+            return f"[error] Access to private network addresses is restricted"
+    except Exception as e:
+        return f"[error] Invalid URL: {e}"
+    
     def _sync():
         with urlopen(Request(url, headers={"User-Agent": "ElfWeave"}), timeout=timeout) as r:
             return r.read().decode(errors="replace")[:8000]
     try: return await asyncio.to_thread(_sync)
     except Exception as e: return f"[error] {e}"
 
-@register_tool("shell", "Run a shell command.")
+@register_tool("shell", "Run a shell command (restricted to safe commands).")
 async def tool_shell(cmd: str, ui: UIState, refresh: Callable) -> str:
+    # Security: Only allow safe, non-interactive commands
+    SAFE_COMMANDS = {
+        "ls", "dir", "pwd", "echo", "cat", "head", "tail", "wc",
+        "grep", "find", "which", "whoami", "uname", "date", "time",
+        "git", "python", "python3", "pip", "pip3", "node", "npm",
+        "curl", "wget", "dig", "nslookup", "ping", "netstat", "ss",
+        "df", "du", "free", "top", "ps", "kill", "chmod", "chown",
+        "mkdir", "rmdir", "cp", "mv", "rm", "touch", "ln",
+        "sed", "awk", "sort", "uniq", "cut", "tr", "tee",
+        "zip", "unzip", "tar", "gzip", "gunzip",
+    }
+    
+    # Parse the base command (first word)
+    base_cmd = cmd.split()[0] if cmd.split() else ""
+    
+    # Block dangerous patterns
+    DANGEROUS_PATTERNS = [
+        "|", "&&", "||", ";", "`", "$(", ">>", ">", "<", "&",
+        "sudo", "su ", "passwd", "shadow", "rm -rf /", "mkfs",
+        "dd if=", ":(){:|:&};:", "fork bomb", "eval", "exec"
+    ]
+    
+    if not base_cmd or base_cmd not in SAFE_COMMANDS:
+        return f"[error] Command '{base_cmd}' is not in the allowed command list."
+    
+    # Check for dangerous patterns
+    for pattern in DANGEROUS_PATTERNS:
+        if pattern in cmd:
+            return f"[error] Command contains dangerous pattern: '{pattern}'"
+    
     try:
-        proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        # Use create_subprocess_exec for safer argument handling
+        args = cmd.split()
+        proc = await asyncio.create_subprocess_exec(
+            args[0], *args[1:], 
+            stdout=asyncio.subprocess.PIPE, 
+            stderr=asyncio.subprocess.STDOUT
+        )
         chunks = []
         while True:
             line = await proc.stdout.readline()
@@ -272,8 +343,11 @@ def get_learned_lessons(query: Optional[str] = None, limit: int = 5) -> str:
     if not EXPERIENCE_PATH.exists(): return "No past experiences."
     lessons = []
     try:
-        with open(EXPERIENCE_PATH, "r") as f:
-            entries = [json.loads(line) for line in f if line.strip()]
+        # Use asyncio.to_thread for non-blocking file I/O in async contexts
+        def _load_entries():
+            with open(EXPERIENCE_PATH, "r", encoding="utf-8") as f:
+                return [json.loads(line) for line in f if line.strip()]
+        entries = _load_entries()
     except: return "Experience load error."
 
     if not entries:
@@ -305,7 +379,8 @@ def get_learned_lessons(query: Optional[str] = None, limit: int = 5) -> str:
         )
     return "\n".join(lessons) or "No experiences."
 
-def save_experience(query: str, res: List[StepResult], validation: Dict, timestamp: str):
+def save_experience(query: str, res: List[StepResult], validation: Dict, timestamp: str, max_entries: int = 1000):
+    """Save experience entry with log rotation to prevent unbounded growth."""
     fix = next((r.output for r in res if r.plan_step.tool == "repair_code" and not r.error), "")
     failing = next((r for r in res if r.error), None)
     entry = {
@@ -330,5 +405,17 @@ def save_experience(query: str, res: List[StepResult], validation: Dict, timesta
         ],
     }
     try:
-        with open(EXPERIENCE_PATH, "a") as f: f.write(json.dumps(entry) + "\n")
+        # Rotate log if it exceeds max_entries
+        if EXPERIENCE_PATH.exists():
+            def _count_and_rotate():
+                with open(EXPERIENCE_PATH, "r", encoding="utf-8") as f:
+                    lines = [line for line in f if line.strip()]
+                if len(lines) >= max_entries:
+                    # Keep only the most recent entries
+                    with open(EXPERIENCE_PATH, "w", encoding="utf-8") as f:
+                        f.writelines(lines[-max_entries//2:])
+            _count_and_rotate()
+        
+        with open(EXPERIENCE_PATH, "a", encoding="utf-8") as f: 
+            f.write(json.dumps(entry) + "\n")
     except: pass

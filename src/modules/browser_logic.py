@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Optional, Any, Callable
 
 # ══════════════════════════════════════════════════════════════════════
@@ -33,7 +34,10 @@ class BrowserAgentLogic:
         self.browser = Browser(
             config=BrowserConfig(
                 headless=self.headless,
-                disable_security=True, # Often needed for local scraping
+                # SECURITY WARNING: Disabling security features exposes the browser to potential 
+                # malicious website attacks. Only disable for trusted local scraping scenarios.
+                # Set via environment variable ELFWEAVE_BROWSER_DISABLE_SECURITY=0 to enable security
+                disable_security=os.getenv("ELFWEAVE_BROWSER_DISABLE_SECURITY", "1") == "1",
             )
         )
 

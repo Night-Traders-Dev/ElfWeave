@@ -40,11 +40,16 @@ async def analyze_code(files: List[Path], ui: UIState, client) -> Dict[str, Any]
     past_lessons = ""
     if exp_path.exists():
         try:
-            with open(exp_path, "r") as f:
-                for line in f.readlines()[-10:]:
-                    entry = json.loads(line)
-                    if not entry.get("aligned", True):
-                        past_lessons += f"\n- Failure in '{entry.get('query')}': {entry.get('issues')}"
+            # Use asyncio.to_thread for non-blocking file I/O
+            def _read_experiences():
+                lessons = []
+                with open(exp_path, "r", encoding="utf-8") as f:
+                    for line in f.readlines()[-10:]:
+                        entry = json.loads(line)
+                        if not entry.get("aligned", True):
+                            lessons.append(f"\n- Failure in '{entry.get('query')}': {entry.get('issues')}")
+                return "".join(lessons)
+            past_lessons = await asyncio.to_thread(_read_experiences)
         except: pass
 
     code_bundle = ""
