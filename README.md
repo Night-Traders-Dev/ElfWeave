@@ -13,11 +13,8 @@ Specifically optimized for hardware with **8GB VRAM (RTX 5060)** and 32GB RAM, u
 - **Consistent Harness Output**: Specialist agents emit concise harness-mode summaries so the orchestrator shows one clean result card instead of nested dashboards.
 - **Lower Tooling Overhead**: Specialist subprocesses now reuse the active Python interpreter instead of spawning nested `uv run` environments inside a mission.
 - **Relevance-Based Memory**: The planner now retrieves the most relevant prior successes and failures for the current query instead of only the most recent history.
-- **Optional Megakernel Backend**: ElfWeave can experimentally route selected planning and validation phases through the Luce Megakernel backend while keeping Ollama as the safe default.
-- **Hardware-Aware Tuning**: Optimized for 8GB VRAM using a tiered model strategy:
-  - **qwen3.5:4b** for complex planning and tool orchestration (~3-4GB VRAM)
-  - **qwen3.5:2b** for general agent tasks (~1.5-2GB VRAM)
-  - **qwen3.5:0.8b** for lightweight sanity checks and validation (~0.5-1GB VRAM)
+- **Optional Megakernel Backend**: ElfWeave can experimentally route selected sanity and validation phases through the Luce Megakernel backend (Qwen3.5-0.8B) while keeping Ollama for planning and agent tasks.
+- **Hardware-Aware Tuning**: Optimized for local environment using a tiered model strategy: **qwen3.5:4b** for planning, **qwen3.5:0.8b** for sanity checks and validation, and **qwen3.5:2b** for agent tasks.
 
 ## 🛠 Project Structure
 
@@ -36,7 +33,7 @@ src/
     ├── weather.py           # Entry: Weather Specialist
     ├── browser_agent.py     # Entry: Web Research Specialist
     ├── code_architect.py    # Entry: Design Auditor
-    ├── code_architect_logic.py 
+    ├── code_architect_logic.py
     ├── code_architect_ui.py
     ├── fs_manager.py        # Entry: Repository Explorer
     ├── fs_manager_logic.py
@@ -46,7 +43,7 @@ src/
 ## 🧠 Autonomous Learning & Self-Audit
 
 ElfWeave implements a "Closed-Loop" evolutionary lifecycle:
-1. **Validation Audit**: The Reviewer model (**qwen3.5:0.8b**) performs fast sanity checks and validation scoring.
+1. **Validation Audit**: The Reviewer model (**qwen3.5:0.8b** via megakernel or Ollama) scores every task.
 2. **Failure Analysis**: If a task fails, the `analyze_failure` tool performs a technical root-cause diagnosis.
 3. **Research Fix**: For ambiguous errors, the agent performs a targeted web search to find best practices.
 4. **Autonomous Repair**: The `repair_code` tool applies an LLM-generated patch to the module's source code on disk.
@@ -68,7 +65,8 @@ ElfWeave now has an **experimental** backend adapter for [Luce Megakernel](https
 Current behavior:
 
 - Ollama remains the default backend.
-- Megakernel can be enabled for selected phases such as `planner`, `sanity`, and `validator`.
+- Megakernel is enabled for **sanity** and **validator** phases only (checking and validation).
+- Planning, agent tasks, and other phases continue using Ollama with their respective models (qwen3.5:4b for planner, qwen3.5:2b for agents).
 - If the Megakernel path is unavailable or fails, ElfWeave falls back to Ollama by default.
 - This path is currently best suited for **small text-only orchestration phases**, not the full platform.
 - The repository now vendors Luce Megakernel as the `third_party/luce-megakernel` submodule.
@@ -99,7 +97,7 @@ uv run --with browser-use --with ollama python main.py --use-kernel "weather ash
 export ELFWEAVE_INFERENCE_BACKEND=hybrid
 export ELFWEAVE_MEGAKERNEL_REPO=/home/kraken/elf_g/ElfWeave/third_party/luce-megakernel
 export ELFWEAVE_MEGAKERNEL_MODEL=Qwen/Qwen3.5-0.8B
-export ELFWEAVE_MEGAKERNEL_PHASES=planner,sanity,validator,analyzer,summarizer
+export ELFWEAVE_MEGAKERNEL_PHASES=sanity,validator
 ```
 
 Those values are still overridable with explicit environment variables.
@@ -109,7 +107,7 @@ Available environment flags:
 - `ELFWEAVE_INFERENCE_BACKEND=ollama|hybrid|megakernel`
 - `ELFWEAVE_MEGAKERNEL_REPO=/path/to/luce-megakernel`
 - `ELFWEAVE_MEGAKERNEL_MODEL=Qwen/Qwen3.5-0.8B`
-- `ELFWEAVE_MEGAKERNEL_PHASES=planner,sanity,validator,...`
+- `ELFWEAVE_MEGAKERNEL_PHASES=sanity,validator`
 - `ELFWEAVE_MEGAKERNEL_MAX_TOKENS=256`
 - `ELFWEAVE_MEGAKERNEL_FALLBACK=1`
 - `ELFWEAVE_MEGAKERNEL_CUDA_ARCH=86` to force a specific CUDA arch when building the submodule
@@ -123,6 +121,7 @@ What changed for ElfWeave compatibility:
 Important limitations:
 
 - Luce Megakernel is architecture-specific and currently targets **Qwen 3.5-0.8B hybrid DeltaNet/Attention**, not ElfWeave's default Ollama models.
+- The megakernel runs only for sanity checks (qwen3.5:0.8b) and validation (qwen3.5:0.8b), while planning uses qwen3.5:4b and agent tasks use qwen3.5:2b via Ollama.
 - This integration is an adapter layer, not a drop-in replacement for Ollama.
 - Vision/image requests and unsupported phases stay on Ollama.
 - If the compiled CUDA extension or `torch`/`transformers` dependencies are missing, `--use-kernel` falls back to Ollama and keeps the mission running.
@@ -142,15 +141,23 @@ Important limitations:
 ## 📦 Getting Started
 
 1. **Install Dependencies**: `uv sync`
-2. **Setup Ollama**: Ensure `ollama` is running and pull the required models:
+2. **Setup Ollama**: Ensure `ollama` is running with required models:
    ```bash
-   ollama pull qwen3.5:4b      # Planning (complex reasoning)
-   ollama pull qwen3.5:2b      # Agent tasks (balanced)
-   ollama pull qwen3.5:0.8b    # Checks/validation (lightweight, fast)
+   ollama pull qwen3.5:4b      # Planner model
+   ollama pull qwen3.5:2b      # Agent model
+   ollama pull qwen3.5:0.8b    # Checker/Reviewer (fallback for megakernel)
    ```
-3. **Run a Mission**:
+3. **Optional: Setup Megakernel** (for accelerated sanity/validation):
    ```bash
+   ./scripts/setup_megakernel.sh
+   ```
+4. **Run a Mission**:
+   ```bash
+   # Standard mode (Ollama only)
    uv run --with browser-use --with ollama python main.py "Show me the project structure"
+
+   # Hybrid mode (megakernel for sanity/validation, Ollama for rest)
+   uv run --with browser-use --with ollama python main.py --use-kernel "Show me the project structure"
    ```
 
 ## ✅ Verification

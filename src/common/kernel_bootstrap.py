@@ -7,7 +7,9 @@ from typing import MutableMapping, Sequence
 
 USE_KERNEL_FLAG = "--use-kernel"
 DEFAULT_MEGAKERNEL_MODEL = "Qwen/Qwen3.5-0.8B"
-DEFAULT_MEGAKERNEL_PHASES = "planner,sanity,validator,analyzer,summarizer"
+# Only use megakernel for sanity (checker) and validator (review) phases
+# Planner and other phases continue using Ollama with their respective models
+DEFAULT_MEGAKERNEL_PHASES = "sanity,validator"
 
 
 def elfweave_repo_root() -> Path:

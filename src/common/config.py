@@ -24,14 +24,12 @@ OLLAMA_NUM_GPU      = 99        # Force max layers offload
 OLLAMA_NUM_THREAD   = multiprocessing.cpu_count() // 2
 
 # Model Selection (Tiered for 8GB VRAM)
-# Note: qwen3.5:0.8b is ideal for lightweight tasks (CHECKER, REVIEW) using ~0.5-1GB VRAM
-#       qwen3.5:2b provides better reasoning for moderate tasks (~1.5-2GB VRAM)
-#       qwen3.5:4b recommended for complex planning and tool orchestration (~3-4GB VRAM)
-#       qwen3.5:9b only when VRAM allows or for high-fidelity generation (~6-7GB VRAM)
+# Note: qwen3.5:0.8b is used for CHECKER and REVIEW phases when MEGAKERNEL_ENABLED
+#       Otherwise, these models run via Ollama
 PLANNER_MODEL       = os.getenv("ELFWEAVE_PLANNER_MODEL", "qwen3.5:4b")      # Stronger at tool-use/reasoning
-CHECKER_MODEL       = os.getenv("ELFWEAVE_CHECKER_MODEL", "qwen3.5:0.8b")   # Lightweight sanity checks (0.8B works great here)
-REVIEW_MODEL        = os.getenv("ELFWEAVE_REVIEW_MODEL", "qwen3.5:0.8b")    # Lightweight validation (0.8B works great here)
-AGENT_MODEL         = os.getenv("ELFWEAVE_AGENT_MODEL", "qwen3.5:2b")       # Default persona model (balanced performance/VRAM)
+CHECKER_MODEL       = os.getenv("ELFWEAVE_CHECKER_MODEL", "qwen3.5:0.8b")   # Fast sanity checks (megakernel or ollama)
+REVIEW_MODEL        = os.getenv("ELFWEAVE_REVIEW_MODEL", "qwen3.5:0.8b")    # Fast validation (megakernel or ollama)
+AGENT_MODEL         = os.getenv("ELFWEAVE_AGENT_MODEL", "qwen3.5:2b")       # Balanced persona model
 DEFAULT_MODEL       = AGENT_MODEL
 
 REPO_ROOT           = Path(__file__).resolve().parents[2]
@@ -80,18 +78,18 @@ def get_ollama_options(ctx_override: int = None):
 # ════════════════════════════════════════════════─═════════════════════
 
 PLANNER_SYSTEM = dedent("""\
-    You are a high-autonomy task planner. 
+    You are a high-autonomy task planner.
     You break down complex queries into sequential tool calls.
-    
+
     Rules:
       1. Use only tools listed in the catalogue.
-      2. Specialist Priority: ALWAYS prefer specialized agents (weather, browser, knowledge_query) 
+      2. Specialist Priority: ALWAYS prefer specialized agents (weather, browser, knowledge_query)
          over raw utilities (http_get, shell) for their respective domains.
       3. Minimal Hallucination: Do NOT invent arguments, URLs, or paths.
       4. Signature Audit: Carefully match your "args" to the parameters in the catalogue.
-      5. Research-First: If a tool fails with a technical error you don't recognize, 
+      5. Research-First: If a tool fails with a technical error you don't recognize,
          call `analyze_failure` and then `research_fix` to learn the solution from the web.
-      6. Self-Healing: Use `repair_code` ONLY after identifying a specific fix (via research 
+      6. Self-Healing: Use `repair_code` ONLY after identifying a specific fix (via research
          or analysis) before retrying the task.
       7. To pass a prior step's output as an arg value, use the string "{step_N}"
          where N is the 0-based index of the prior step (e.g. "{step_0}").

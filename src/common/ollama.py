@@ -61,11 +61,8 @@ class MegaKernelRuntime:
     def availability_reason_sync(self) -> str:
         if not self.configured:
             return f"megakernel repo is missing model.py at {self.repo_path}"
-        if self.model_name != DEFAULT_MEGAKERNEL_MODEL:
-            return (
-                f"luce-megakernel currently supports {DEFAULT_MEGAKERNEL_MODEL}, "
-                f"not {self.model_name}"
-            )
+        # Model name check removed - megakernel uses its internal Qwen3.5-0.8B weights
+        # regardless of the Ollama model name configured for fallback
 
         repo_str = str(self.repo_path)
         if repo_str not in sys.path:
@@ -125,8 +122,7 @@ class MegaKernelRuntime:
         messages: List[Dict[str, Any]],
         options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, str]:
-        if self.model_name != DEFAULT_MEGAKERNEL_MODEL:
-            return False, f"unsupported model {self.model_name}"
+        # Model name check removed - megakernel always uses Qwen3.5-0.8B internally
 
         options = options or {}
         max_tokens = int(options.get("num_predict") or options.get("max_tokens") or self.max_tokens)
@@ -324,7 +320,7 @@ _est_tokens = _rough_token_estimate
 
 async def setup_ollama(url: str, models: List[str]) -> InferenceClient:
     import shutil
-    
+
     ollama_client = AsyncClient(host=url)
     try:
         await ollama_client.list()
@@ -451,10 +447,10 @@ async def _chat_json(
         # even for JSON calls, so the user sees progress.
         messages = [{"role": "system", "content": system},
                     {"role": "user",   "content": current_user_msg}]
-        
+
         # We use our existing _stream_chat logic to get the text and usage
         raw_text, u = await _stream_chat(client, model, messages, ui, refresh, phase)
-        
+
         last = raw_text
         # Extract JSON block
         clean = re.sub(r"```(?:json)?|```", "", raw_text.strip()).strip()
@@ -464,7 +460,7 @@ async def _chat_json(
                 return json.loads(m.group(1)), u
             except json.JSONDecodeError:
                 pass
-        
+
         # Fallback: handles truncated JSON (missing closing brace)
         if clean.startswith("{") and not clean.endswith("}"):
             try:
@@ -474,5 +470,5 @@ async def _chat_json(
 
         if attempt < retries:
             current_user_msg += "\n\nCRITICAL: Return ONLY the JSON object. No prose. The previous attempt was unparseable or truncated."
-            
+
     raise ValueError(f"No valid JSON from {model} after {retries} retries. Final output: {last!r}")
