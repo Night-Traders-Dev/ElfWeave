@@ -68,7 +68,11 @@ async def run(query: str, dry_run: bool = False) -> int:
             # 1. Init
             s_init = ui.add_step("connect + warmup").start(); refresh()
             client = await setup_ollama(OLLAMA_URL, [CHECKER_MODEL, PLANNER_MODEL, REVIEW_MODEL])
-            await asyncio.gather(*[_warmup(client, m) for m in [CHECKER_MODEL, PLANNER_MODEL, REVIEW_MODEL]])
+            await asyncio.gather(
+                _warmup(client, CHECKER_MODEL, phase="sanity"),
+                _warmup(client, PLANNER_MODEL, phase="planner"),
+                _warmup(client, REVIEW_MODEL, phase="validator"),
+            )
             s_init.done("Ollama ready"); refresh()
 
             # 2. Sanity

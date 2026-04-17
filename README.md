@@ -13,6 +13,7 @@ Specifically optimized for hardware with **8GB VRAM (RTX 5060)** and 32GB RAM, u
 - **Consistent Harness Output**: Specialist agents emit concise harness-mode summaries so the orchestrator shows one clean result card instead of nested dashboards.
 - **Lower Tooling Overhead**: Specialist subprocesses now reuse the active Python interpreter instead of spawning nested `uv run` environments inside a mission.
 - **Relevance-Based Memory**: The planner now retrieves the most relevant prior successes and failures for the current query instead of only the most recent history.
+- **Optional Megakernel Backend**: ElfWeave can experimentally route selected planning and validation phases through the Luce Megakernel backend while keeping Ollama as the safe default.
 - **Hardware-Aware Tuning**: Optimized for local environment using **qwen2.5:7b** for planning and **llama3.1:8b** for high-fidelity code generation and validation.
 
 ## 🛠 Project Structure
@@ -56,6 +57,50 @@ ElfWeave implements a "Closed-Loop" evolutionary lifecycle:
 - **Harness mode**: specialists return plain, width-conscious summaries so the top-level harness owns the final presentation.
 - **Shared chrome**: step rows, cards, and validation blocks all use the same responsive sizing rules from `src/common/ui.py`.
 - **Interpreter reuse**: tool subprocesses inherit the live mission environment, which removes nested `uv` environment churn and reduces startup overhead.
+
+## ⚙ Optional Megakernel Backend
+
+ElfWeave now has an **experimental** backend adapter for [Luce Megakernel](https://github.com/Luce-Org/luce-megakernel). This is optional and disabled by default.
+
+Current behavior:
+
+- Ollama remains the default backend.
+- Megakernel can be enabled for selected phases such as `planner`, `sanity`, and `validator`.
+- If the Megakernel path is unavailable or fails, ElfWeave falls back to Ollama by default.
+- This path is currently best suited for **small text-only orchestration phases**, not the full platform.
+
+Suggested setup:
+
+```bash
+git clone https://github.com/Luce-Org/luce-megakernel /path/to/luce-megakernel
+cd /path/to/luce-megakernel
+pip install -e .
+pip install transformers accelerate
+```
+
+Then enable it for ElfWeave:
+
+```bash
+export ELFWEAVE_INFERENCE_BACKEND=hybrid
+export ELFWEAVE_MEGAKERNEL_REPO=/path/to/luce-megakernel
+export ELFWEAVE_MEGAKERNEL_MODEL=Qwen/Qwen3.5-0.8B
+export ELFWEAVE_MEGAKERNEL_PHASES=planner,sanity,validator,analyzer,summarizer
+```
+
+Available environment flags:
+
+- `ELFWEAVE_INFERENCE_BACKEND=ollama|hybrid|megakernel`
+- `ELFWEAVE_MEGAKERNEL_REPO=/path/to/luce-megakernel`
+- `ELFWEAVE_MEGAKERNEL_MODEL=Qwen/Qwen3.5-0.8B`
+- `ELFWEAVE_MEGAKERNEL_PHASES=planner,sanity,validator,...`
+- `ELFWEAVE_MEGAKERNEL_MAX_TOKENS=256`
+- `ELFWEAVE_MEGAKERNEL_FALLBACK=1`
+
+Important limitations:
+
+- Luce Megakernel is architecture-specific and currently targets **Qwen 3.5-0.8B hybrid DeltaNet/Attention**, not ElfWeave's default Ollama models.
+- This integration is an adapter layer, not a drop-in replacement for Ollama.
+- Vision/image requests and unsupported phases stay on Ollama.
 
 ## 🤖 Agent Roster & Examples
 

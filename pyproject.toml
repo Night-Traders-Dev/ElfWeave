@@ -21,3 +21,7 @@ knowledge = [
     "faiss-cpu",
     "sentence-transformers",
 ]
+megakernel = [
+    "accelerate",
+    "transformers",
+]

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from textwrap import dedent
 import multiprocessing
@@ -16,11 +17,27 @@ OLLAMA_NUM_GPU      = 99        # Force max layers offload
 OLLAMA_NUM_THREAD   = multiprocessing.cpu_count() // 2
 
 # Model Selection (Tiered for 8GB VRAM)
-PLANNER_MODEL       = "qwen2.5:7b"      # Stronger at tool-use/reasoning
-CHECKER_MODEL       = "llama3.1:8b"     # Reliable for sanity checks
-REVIEW_MODEL        = "llama3.1:8b"     # Standard validation model
-AGENT_MODEL         = "llama3.1:8b"     # Default persona model
+PLANNER_MODEL       = os.getenv("ELFWEAVE_PLANNER_MODEL", "qwen2.5:7b")      # Stronger at tool-use/reasoning
+CHECKER_MODEL       = os.getenv("ELFWEAVE_CHECKER_MODEL", "llama3.1:8b")     # Reliable for sanity checks
+REVIEW_MODEL        = os.getenv("ELFWEAVE_REVIEW_MODEL", "llama3.1:8b")      # Standard validation model
+AGENT_MODEL         = os.getenv("ELFWEAVE_AGENT_MODEL", "llama3.1:8b")       # Default persona model
 DEFAULT_MODEL       = AGENT_MODEL
+
+# Optional Megakernel Backend
+INFERENCE_BACKEND   = os.getenv("ELFWEAVE_INFERENCE_BACKEND", "ollama").strip().lower()
+MEGAKERNEL_ENABLED  = INFERENCE_BACKEND in {"hybrid", "megakernel"} or os.getenv("ELFWEAVE_MEGAKERNEL_ENABLE", "0") == "1"
+MEGAKERNEL_REPO     = os.getenv("ELFWEAVE_MEGAKERNEL_REPO", "").strip()
+MEGAKERNEL_MODEL    = os.getenv("ELFWEAVE_MEGAKERNEL_MODEL", "Qwen/Qwen3.5-0.8B").strip()
+MEGAKERNEL_MAX_TOKENS = int(os.getenv("ELFWEAVE_MEGAKERNEL_MAX_TOKENS", "256"))
+MEGAKERNEL_PHASES   = tuple(
+    part.strip().lower()
+    for part in os.getenv(
+        "ELFWEAVE_MEGAKERNEL_PHASES",
+        "planner,sanity,validator,analyzer,summarizer",
+    ).split(",")
+    if part.strip()
+)
+MEGAKERNEL_FALLBACK = os.getenv("ELFWEAVE_MEGAKERNEL_FALLBACK", "1") != "0"
 
 # Memory & Knowledge
 KNOWLEDGE_DIR       = Path.home() / ".elfweave_knowledge"
