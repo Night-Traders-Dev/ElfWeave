@@ -168,7 +168,8 @@ async def _run_tool_subprocess(args: List[str], ui: UIState, refresh: Callable) 
     await asyncio.gather(read(proc.stdout, stdout), read(proc.stderr, stderr, True))
     await proc.wait()
     if proc.returncode != 0:
-        return f"[tool error] {'\n'.join(stderr)}" if stderr else f"[tool error] code {proc.returncode}"
+        stderr_text = "\n".join(stderr)
+        return f"[tool error] {stderr_text}" if stderr_text else f"[tool error] code {proc.returncode}"
     return "\n".join(stdout)
 
 @register_tool("weather", "PRIMARY weather Specialist.")
