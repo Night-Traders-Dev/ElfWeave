@@ -1,5 +1,5 @@
 import json
-import pickle
+
 import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -13,7 +13,7 @@ class KnowledgeLogic:
         self.index_dir = index_dir
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.index_dir / "faiss.index"
-        self.meta_path = self.index_dir / "metadata.pkl"
+        self.meta_path = self.index_dir / "metadata.json"
         
         self.index = None
         self.metadata: List[Dict[str, Any]] = []
@@ -43,8 +43,9 @@ class KnowledgeLogic:
             return False
         if self.index_path.exists() and self.meta_path.exists():
             self.index = faiss.read_index(str(self.index_path))
-            with open(self.meta_path, "rb") as f:
-                self.metadata = pickle.load(f)
+            # Safe JSON deserialization instead of pickle
+            with open(self.meta_path, "r", encoding="utf-8") as f:
+                self.metadata = json.load(f)
             return True
         return False
 
@@ -55,8 +56,9 @@ class KnowledgeLogic:
             return
         if self.index:
             faiss.write_index(self.index, str(self.index_path))
-            with open(self.meta_path, "wb") as f:
-                pickle.dump(self.metadata, f)
+            # Safe JSON serialization instead of pickle
+            with open(self.meta_path, "w", encoding="utf-8") as f:
+                json.dump(self.metadata, f)
 
     def index_files(self, root_dir: Path, extensions: List[str] = [".py", ".md", ".txt"]):
         try:

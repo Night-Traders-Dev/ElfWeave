@@ -314,17 +314,31 @@ async def _warmup(client: Any, model: str, phase: str = "") -> None:
         pass
 
 def _rough_token_estimate(text: str) -> int:
+    """Estimate token count using a consistent heuristic (chars/3)."""
     compact = " ".join(str(text).split())
     return max(1, len(compact) // 3)
 
+# Alias for consistency - use single implementation
+_est_tokens = _rough_token_estimate
+
 
 async def setup_ollama(url: str, models: List[str]) -> InferenceClient:
+    import shutil
+    
     ollama_client = AsyncClient(host=url)
     try:
         await ollama_client.list()
     except Exception:
-        subprocess.Popen(["ollama", "serve"],
+        # Check if ollama binary exists before trying to start it
+        if shutil.which("ollama") is None:
+            raise RuntimeError(
+                "Ollama server is not running and 'ollama' binary not found in PATH. "
+                "Please install Ollama from https://ollama.ai or start the server manually."
+            )
+        proc = subprocess.Popen(["ollama", "serve"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Store reference to prevent garbage collection
+        setup_ollama._ollama_proc = proc
         await _wait_ollama(ollama_client)
     for m in models:
         await _ensure_model(ollama_client, m)
@@ -369,8 +383,7 @@ def _usage_from(resp: Any) -> TokenUsage:
         estimated         = False,
     )
 
-def _est_tokens(text: str) -> int:
-    return max(1, len(text.strip()) // 4)
+# Removed duplicate _est_tokens - now uses the single implementation at line 316-322
 
 async def _stream_chat(
     client: AsyncClient,

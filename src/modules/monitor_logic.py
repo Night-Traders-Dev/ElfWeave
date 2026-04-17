@@ -10,15 +10,19 @@ from typing import List, Dict, Any, Optional, Callable, AsyncGenerator
 async def tail_file(file_path: Path) -> AsyncGenerator[str, None]:
     """Asynchronous file tailing generator."""
     try:
-        with open(file_path, 'r', errors='ignore') as f:
-            # Go to end
-            f.seek(0, os.SEEK_END)
-            while True:
-                line = f.readline()
-                if not line:
-                    await asyncio.sleep(0.5)
-                    continue
-                yield line.strip()
+        # Use asyncio.to_thread for non-blocking file I/O
+        async def _read_lines():
+            with open(file_path, 'r', errors='ignore') as f:
+                f.seek(0, os.SEEK_END)
+                while True:
+                    line = f.readline()
+                    if not line:
+                        await asyncio.sleep(0.5)
+                        continue
+                    yield line.strip()
+        
+        async for line in _read_lines():
+            yield line
     except Exception:
         # Stop on fatal errors (e.g. file deletion)
         return
