@@ -1,7 +1,3 @@
---- scripts/setup_megakernel.sh (原始)
-
-
-+++ scripts/setup_megakernel.sh (修改后)
 #!/bin/bash
 # ElfWeave Megakernel Setup Script
 # This script installs and configures the Luce Megakernel for Qwen3.5-0.8B
